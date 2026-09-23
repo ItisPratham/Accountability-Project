@@ -29,6 +29,12 @@ async function tg(env, method, body) {
   if (!r.ok) console.log(method, r.status, await r.text());
 }
 
+const say = (env, text, html = false) =>
+  tg(env, "sendMessage", { chat_id: env.GROUP_ID, text, ...(html && { parse_mode: "HTML" }) });
+
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const mention = (u) => `<a href="tg://user?id=${u.id}">${esc(u.name)}</a>`;
+
 const reply = (env, msg, text) =>
   tg(env, "sendMessage", {
     chat_id: msg.chat.id,
@@ -162,7 +168,38 @@ async function handle(msg, env) {
   }
 }
 
+// ---- cron ------------------------------------------------------------------
+
+async function scheduled(event, env) {
+  const today = logicalDay();
+  const data = await load(env);
+  const has = (u, week) => data.goals.some((g) => g.user_id === u.id && g.week === week);
+
+  switch (event.cron) {
+    case "0 16 * * *": { // 21:30 IST: name anyone with a goal not logged today
+      const week = mondayOf(today);
+      const logged = new Set(data.logs.filter((l) => l.day === today).map((l) => l.goal_id));
+      const late = data.users.filter((u) =>
+        data.goals.some((g) => g.user_id === u.id && g.week === week && !logged.has(g.id)));
+      if (late.length) await say(env, `Not logged yet today: ${late.map(mention).join(", ")}`, true);
+      return;
+    }
+    case "30 2 * * *": { // 08:00 IST: yesterday's standings. On Monday that is last week's final.
+      const through = addDays(today, -1);
+      return say(env, boardText(standings(data, through), through, false));
+    }
+    case "30 14 * * 0": { // 20:00 IST Sunday: plan next week
+      const missing = data.users.filter((u) => !has(u, addDays(today, 1)));
+      const text = "Sunday planning. Set next week's goals with /goals, they lock at 3am.";
+      const who = missing.length ? `Still to set: ${missing.map(mention).join(", ")}` : "Everyone is set.";
+      return say(env, `${text}\n${who}`, true);
+    }
+  }
+}
+
 export default {
+  scheduled,
+
   async fetch(req, env) {
     // Anyone can POST to a workers.dev URL. Telegram sends this header back on
     // every update, so this check is what keeps strangers out of the database.
