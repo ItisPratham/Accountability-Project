@@ -89,6 +89,9 @@ function goalsText({ users, goals }, today) {
   return out.join("\n").trim();
 }
 
+const welcome = (people) =>
+  `Welcome, ${people.map((u) => mention({ id: u.id, name: u.first_name })).join(", ")}. Here's how this works.\n\n${USAGE}`;
+
 function todayText(goals, logged, today) {
   return [`<b>${shortDay(today)}</b>`, ...goals.map((g) => logged.has(g.id)
     ? `${esc(g.title)}: ${logged.get(g.id)}/${g.target} ${esc(g.unit)}`
@@ -220,7 +223,9 @@ export default {
 
     try {
       if (String(msg.chat.id) === env.GROUP_ID) {
-        if (msg.text?.startsWith("/")) await handle(msg, env);
+        const joined = (msg.new_chat_members ?? []).filter((u) => !u.is_bot);
+        if (joined.length) await say(env, welcome(joined));
+        else if (msg.text?.startsWith("/")) await handle(msg, env);
       } else {
         // Silent everywhere else. The log line is how you find GROUP_ID during
         // setup (wrangler tail); once it is set, walk out of any other group.
