@@ -188,7 +188,7 @@ async function scheduled(event, env) {
       const through = addDays(today, -1);
       return say(env, boardText(standings(data, through), through, false));
     }
-    case "30 14 * * 0": { // 20:00 IST Sunday: plan next week
+    case "30 14 * * SUN": { // 20:00 IST Sunday: plan next week
       const missing = data.users.filter((u) => !has(u, addDays(today, 1)));
       const text = "Sunday planning. Set next week's goals with /goals, they lock at 3am.";
       const who = missing.length ? `Still to set: ${missing.map(mention).join(", ")}` : "Everyone is set.";
