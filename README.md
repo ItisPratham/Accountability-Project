@@ -62,11 +62,22 @@ the 8am standings, and a Sunday 8pm reminder to set goals.
    ```bash
    curl "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" -d url=https://<your-worker>.workers.dev -d secret_token=<SECRET>
    ```
-6. Create a group, add the bot, and send `/help`. It replies with the group's
-   chat id. Store that as `GROUP_ID` and the bot starts working:
+6. Find the group's chat id. Run `npx wrangler tail`, create a Telegram
+   group, and add the bot. The tail prints `ignored chat -100...`. Store that
+   number as `GROUP_ID` and the bot starts answering in that group:
    ```bash
    npx wrangler secret put GROUP_ID
    ```
+7. In @BotFather, send `/setjoingroups`, pick the bot, and choose Disable.
+   Nobody can add it to another group after that, you included. Turn it back
+   on for a minute if you ever move to a new group.
+
+## Who can use it
+
+Only members of your group. Everywhere else the bot stays silent, and it
+leaves any other group the moment it notices one. Nothing reaches the database
+without the webhook secret. Membership is the access control, so keep the group
+private and only let admins add members.
 
 ## Development
 

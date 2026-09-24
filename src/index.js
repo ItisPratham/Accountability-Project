@@ -32,17 +32,18 @@ async function tg(env, method, body) {
   const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ parse_mode: "HTML", ...body }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) console.log(method, r.status, await r.text());
 }
 
-const say = (env, text) => tg(env, "sendMessage", { chat_id: env.GROUP_ID, text });
+const say = (env, text) => tg(env, "sendMessage", { chat_id: env.GROUP_ID, text, parse_mode: "HTML" });
 
 const reply = (env, msg, text) =>
   tg(env, "sendMessage", {
     chat_id: msg.chat.id,
     text,
+    parse_mode: "HTML",
     reply_parameters: { message_id: msg.message_id },
   });
 
@@ -215,15 +216,18 @@ export default {
       return new Response("no", { status: 401 });
     }
     const msg = (await req.json()).message;
-    if (!msg?.text?.startsWith("/")) return new Response("ok");
+    if (!msg) return new Response("ok");
 
     try {
-      // Only the one group counts. Anywhere else, hand back the chat id,
-      // which is also how you find GROUP_ID during setup.
-      if (String(msg.chat.id) !== env.GROUP_ID) {
-        await reply(env, msg, `This bot only works in its own group. This chat's id is ${msg.chat.id}`);
+      if (String(msg.chat.id) === env.GROUP_ID) {
+        if (msg.text?.startsWith("/")) await handle(msg, env);
       } else {
-        await handle(msg, env);
+        // Silent everywhere else. The log line is how you find GROUP_ID during
+        // setup (wrangler tail); once it is set, walk out of any other group.
+        console.log("ignored chat", msg.chat.id, msg.chat.type);
+        if (env.GROUP_ID !== "0" && msg.chat.type !== "private") {
+          await tg(env, "leaveChat", { chat_id: msg.chat.id });
+        }
       }
     } catch (e) {
       // Still answer 200, or Telegram retries the same update forever.
