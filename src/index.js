@@ -3,20 +3,28 @@ import {
   goalWeek, parseGoals, parseLog, standings,
 } from "./core.js";
 
-const USAGE = `/goals, then one goal per line: name weight target unit
-  /goals
-  dsa 40 45 min
-  gym 30 1 session
-  read 30 20 pages
-Up to 5 goals, weights add to exactly 100, target is per day.
-Set them on Sunday. They lock Monday 3am until the next Sunday.
+// Every message goes out as Telegram HTML, so anything a user typed
+// (names, goal titles, units, error text quoting them) must pass through esc().
 
-/log 45 1 20   today's numbers, in your goal order
-/log dsa 45    just one goal
-/board         this week's standings
-/goals         everyone's goals
+const GOALS_HELP = `<b>Set your goals</b>
+<pre>/goals
+dsa 40 45 min
+gym 30 1 session
+read 30 20 pages</pre>
+One per line: name, weight, daily target, unit.
+Up to 5 goals, weights add up to exactly 100.
+Set them on Sunday, they lock at 3am Monday. New midweek? Set them now.`;
 
-A day stays open until 3am.`;
+const USAGE = `${GOALS_HELP}
+
+<b>Log every day, before 3am</b>
+<code>/log 45 1 20</code>  every goal, in order
+<code>/log dsa 45</code>  just one goal
+<code>/log</code>  what you've logged today
+
+<b>Check in</b>
+<code>/board</code>  this week's standings
+<code>/goals</code>  everyone's goals`;
 
 // ---- telegram --------------------------------------------------------------
 
@@ -24,16 +32,12 @@ async function tg(env, method, body) {
   const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ parse_mode: "HTML", ...body }),
   });
   if (!r.ok) console.log(method, r.status, await r.text());
 }
 
-const say = (env, text, html = false) =>
-  tg(env, "sendMessage", { chat_id: env.GROUP_ID, text, ...(html && { parse_mode: "HTML" }) });
-
-const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const mention = (u) => `<a href="tg://user?id=${u.id}">${esc(u.name)}</a>`;
+const say = (env, text) => tg(env, "sendMessage", { chat_id: env.GROUP_ID, text });
 
 const reply = (env, msg, text) =>
   tg(env, "sendMessage", {
@@ -41,6 +45,9 @@ const reply = (env, msg, text) =>
     text,
     reply_parameters: { message_id: msg.message_id },
   });
+
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const mention = (u) => `<a href="tg://user?id=${u.id}">${esc(u.name)}</a>`;
 
 // ---- formatting ------------------------------------------------------------
 
@@ -53,13 +60,13 @@ function boardText(rows, through, open) {
   const week = mondayOf(through);
   const full = daysBetween(week, through).length;
   const head = weekday(through) === 0 && !open
-    ? `Final, week of ${dayMonth(week)}`
-    : `Week of ${dayMonth(week)}, through ${shortDay(through)}${open ? " (today still open)" : ""}`;
-  if (!rows.length) return `${head}\nNobody has goals set.`;
+    ? `<b>Final, week of ${dayMonth(week)}</b>`
+    : `<b>Week of ${dayMonth(week)}</b>\nthrough ${shortDay(through)}${open ? ", today still open" : ""}`;
+  if (!rows.length) return `${head}\n\nNobody has goals set.`;
   return [head, "", ...rows.map((r, i) =>
-    `${i + 1}. ${r.user.name}  ${Math.round(r.score)}` +
-    (r.days < full ? ` (${r.days}d)` : "") +
-    (r.allTime === null ? "" : `  · avg ${Math.round(r.allTime)}`))].join("\n");
+    `${i + 1}. <b>${esc(r.user.name)}</b>  ${Math.round(r.score)}` +
+    (r.days < full ? ` · ${r.days}d` : "") +
+    (r.allTime === null ? "" : `   <i>avg ${Math.round(r.allTime)}</i>`))].join("\n");
 }
 
 function goalsText({ users, goals }, today) {
@@ -67,23 +74,24 @@ function goalsText({ users, goals }, today) {
   if (weekday(today) === 0) weeks.push(addDays(today, 1));
   const out = [];
   for (const week of weeks) {
-    out.push(`Week of ${dayMonth(week)}`);
+    out.push(`<b>${week > today ? "Next week" : "This week"}, from ${dayMonth(week)}</b>`);
     const people = users.filter((u) => goals.some((g) => g.user_id === u.id && g.week === week));
-    if (!people.length) out.push("  nobody yet");
+    if (!people.length) out.push("Nobody yet.");
     for (const u of people) {
-      out.push(u.name);
+      out.push("", `<b>${esc(u.name)}</b>`);
       for (const g of goals.filter((g) => g.user_id === u.id && g.week === week)) {
-        out.push(`  ${g.pos}. ${g.title}  ${g.target} ${g.unit}/day  (${g.weight}%)`);
+        out.push(`${g.pos}. ${esc(g.title)} · ${g.target} ${esc(g.unit)} a day · ${g.weight}%`);
       }
     }
-    out.push("");
+    out.push("", "");
   }
   return out.join("\n").trim();
 }
 
 function todayText(goals, logged, today) {
-  const parts = goals.map((g) => `${g.title} ${logged.get(g.id) ?? "-"}/${g.target} ${g.unit}`);
-  return `${shortDay(today)}: ${parts.join(" · ")}`;
+  return [`<b>${shortDay(today)}</b>`, ...goals.map((g) => logged.has(g.id)
+    ? `${esc(g.title)}: ${logged.get(g.id)}/${g.target} ${esc(g.unit)}`
+    : `${esc(g.title)}: not logged`)].join("\n");
 }
 
 // ---- database --------------------------------------------------------------
@@ -132,7 +140,7 @@ async function handle(msg, env) {
       if (!body) return reply(env, msg, goalsText(await load(env), today));
 
       const parsed = parseGoals(body);
-      if (parsed.error) return reply(env, msg, `${parsed.error}\n\n${USAGE}`);
+      if (parsed.error) return reply(env, msg, `${esc(parsed.error)}\n\n${GOALS_HELP}`);
 
       const current = await myGoals(env, me.id, mondayOf(today));
       const week = goalWeek(today, current.length > 0);
@@ -149,7 +157,7 @@ async function handle(msg, env) {
             .bind(me.id, week, g.pos, g.title, g.unit, g.target, g.weight)),
       ]);
       const lock = week > today ? "Editable until 3am, then locked for the week." : "Locked until Sunday.";
-      return reply(env, msg, `Set for the week of ${dayMonth(week)}. ${lock}\n/log takes numbers in this order: ${parsed.goals.map((g) => g.title).join(", ")}`);
+      return reply(env, msg, `Set for the week of ${dayMonth(week)}. ${lock}\n/log takes numbers in this order: ${esc(parsed.goals.map((g) => g.title).join(", "))}`);
     }
 
     case "/log": {
@@ -158,7 +166,7 @@ async function handle(msg, env) {
       if (!args.length) return reply(env, msg, todayText(goals, await loggedToday(env, me.id, today), today));
 
       const parsed = parseLog(args, goals);
-      if (parsed.error) return reply(env, msg, parsed.error);
+      if (parsed.error) return reply(env, msg, esc(parsed.error));
 
       await env.DB.batch(parsed.entries.map(([g, n]) =>
         env.DB.prepare("INSERT INTO logs (goal_id, day, amount) VALUES (?, ?, ?) ON CONFLICT(goal_id, day) DO UPDATE SET amount = excluded.amount")
@@ -181,7 +189,7 @@ async function scheduled(event, env) {
       const logged = new Set(data.logs.filter((l) => l.day === today).map((l) => l.goal_id));
       const late = data.users.filter((u) =>
         data.goals.some((g) => g.user_id === u.id && g.week === week && !logged.has(g.id)));
-      if (late.length) await say(env, `Not logged yet today: ${late.map(mention).join(", ")}`, true);
+      if (late.length) await say(env, `Not logged yet today: ${late.map(mention).join(", ")}`);
       return;
     }
     case "30 2 * * *": { // 08:00 IST: yesterday's standings. On Monday that is last week's final.
@@ -192,7 +200,7 @@ async function scheduled(event, env) {
       const missing = data.users.filter((u) => !has(u, addDays(today, 1)));
       const text = "Sunday planning. Set next week's goals with /goals, they lock at 3am.";
       const who = missing.length ? `Still to set: ${missing.map(mention).join(", ")}` : "Everyone is set.";
-      return say(env, `${text}\n${who}`, true);
+      return say(env, `${text}\n${who}`);
     }
   }
 }
