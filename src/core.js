@@ -128,7 +128,8 @@ export function parseGoals(body) {
 
   const total = goals.reduce((s, g) => s + g.weight, 0);
   if (Math.abs(total - 100) > 0.01) {
-    return { error: `Weights add up to ${+total.toFixed(2)}, they need to make exactly 100.` };
+    const sum = goals.map((g) => `${g.title} ${g.weight}`).join(" + ");
+    return { error: `Weights must add up to 100, yours make ${sum} = ${+total.toFixed(2)}.` };
   }
   if (new Set(goals.map((g) => g.title.toLowerCase())).size !== goals.length) {
     return { error: "Two goals have the same name." };
@@ -152,7 +153,10 @@ export function parseLog(args, goals) {
   }
   const ns = toks.map(readNum).filter(Boolean).map((r) => r.n);
   if (ns.length !== goals.length) {
-    return { error: `Send ${goals.length} numbers, in this order: ${goals.map((g) => g.title).join(", ")}` };
+    return {
+      error: `Send ${goals.length} numbers, one per goal in this order: ${goals.map((g) => g.title).join(", ")}\n` +
+        `Like: /log ${goals.map((g) => g.target).join(" ")}`,
+    };
   }
   return { entries: goals.map((g, i) => [g, ns[i]]) };
 }

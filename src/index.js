@@ -7,24 +7,38 @@ import {
 // (names, goal titles, units, error text quoting them) must pass through esc().
 
 const GOALS_HELP = `<b>Set your goals</b>
+Send /goals, then one goal per line:
+<code>name  weight%  daily-target  unit</code>
+
 <pre>/goals
 dsa 40% 45 min
 gym 30% 1 session
 read 30% 20 pages</pre>
-One per line: name, weight %, daily target, unit.
-Up to 5 goals, weights add up to 100.
-Set them on Sunday, they lock at 3am Monday. New midweek? Set them now.`;
+
+<b>name</b>: what it is. Spaces become dashes.
+<b>weight%</b>: how much it counts. All weights add up to 100.
+<b>daily target</b>: what a full day looks like.
+<b>unit</b>: min, pages, problems... optional.
+
+So <code>dsa 40% 45 min</code> means DSA is 40% of your score, and 45 minutes is a full day.
+
+Up to 5 goals. Set them on Sunday, they lock at 3am Monday for the whole week. Joining midweek? Set them now.`;
 
 const USAGE = `${GOALS_HELP}
 
 <b>Log every day, before 3am</b>
-<code>/log 45 1 20</code>  every goal, in order
-<code>/log dsa 45</code>  just one goal
-<code>/log</code>  what you've logged today
+<code>/log 45 1 20</code>  one number per goal, in the order you set them
+<code>/log dsa 45</code>  update just one goal
+<code>/log</code>  see what you've logged today
+Logging again replaces that day's number.
+
+<b>How scoring works</b>
+Each goal scores what you logged ÷ its target, capped at 100%. A day with no log scores 0. Extra carries over to cover the next day, but only one day's worth. Your week is the weighted average, and it resets every Monday.
 
 <b>Check in</b>
 <code>/board</code>  this week's standings
-<code>/goals</code>  everyone's goals`;
+<code>/goals</code>  everyone's goals
+<code>/help</code>  this message`;
 
 // ---- telegram --------------------------------------------------------------
 
