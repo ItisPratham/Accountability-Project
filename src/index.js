@@ -8,11 +8,11 @@ import {
 
 const GOALS_HELP = `<b>Set your goals</b>
 <pre>/goals
-dsa 40 45 min
-gym 30 1 session
-read 30 20 pages</pre>
-One per line: name, weight, daily target, unit.
-Up to 5 goals, weights add up to exactly 100.
+dsa 40% 45 min
+gym 30% 1 session
+read 30% 20 pages</pre>
+One per line: name, weight %, daily target, unit.
+Up to 5 goals, weights add up to 100.
 Set them on Sunday, they lock at 3am Monday. New midweek? Set them now.`;
 
 const USAGE = `${GOALS_HELP}
@@ -57,6 +57,10 @@ const fmt = (day, opts) =>
 const dayMonth = (day) => fmt(day, { day: "numeric", month: "short" });
 const shortDay = (day) => fmt(day, { weekday: "short", day: "numeric", month: "short" });
 
+const qty = (n, unit) => (unit ? `${n} ${esc(unit)}` : `${n}`);
+const goalLine = (g) =>
+  `${g.pos}. ${esc(g.title)} · ${qty(g.target, g.unit)} a day · ${+Number(g.weight).toFixed(2)}%`;
+
 function boardText(rows, through, open) {
   const week = mondayOf(through);
   const full = daysBetween(week, through).length;
@@ -81,7 +85,7 @@ function goalsText({ users, goals }, today) {
     for (const u of people) {
       out.push("", `<b>${esc(u.name)}</b>`);
       for (const g of goals.filter((g) => g.user_id === u.id && g.week === week)) {
-        out.push(`${g.pos}. ${esc(g.title)} · ${g.target} ${esc(g.unit)} a day · ${g.weight}%`);
+        out.push(goalLine(g));
       }
     }
     out.push("", "");
@@ -94,7 +98,7 @@ const welcome = (people) =>
 
 function todayText(goals, logged, today) {
   return [`<b>${shortDay(today)}</b>`, ...goals.map((g) => logged.has(g.id)
-    ? `${esc(g.title)}: ${logged.get(g.id)}/${g.target} ${esc(g.unit)}`
+    ? `${esc(g.title)}: ${logged.get(g.id)}/${qty(g.target, g.unit)}`
     : `${esc(g.title)}: not logged`)].join("\n");
 }
 
@@ -161,7 +165,13 @@ async function handle(msg, env) {
             .bind(me.id, week, g.pos, g.title, g.unit, g.target, g.weight)),
       ]);
       const lock = week > today ? "Editable until 3am, then locked for the week." : "Locked until Sunday.";
-      return reply(env, msg, `Set for the week of ${dayMonth(week)}. ${lock}\n/log takes numbers in this order: ${esc(parsed.goals.map((g) => g.title).join(", "))}`);
+      return reply(env, msg, [
+        `<b>Set for the week of ${dayMonth(week)}</b>`,
+        ...parsed.goals.map(goalLine),
+        "",
+        lock,
+        `/log takes numbers in this order: ${esc(parsed.goals.map((g) => g.title).join(", "))}`,
+      ].join("\n"));
     }
 
     case "/log": {

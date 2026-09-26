@@ -8,7 +8,8 @@ It runs on a Cloudflare Worker with D1 (SQLite) and fits in the free tier.
 
 ## Rules
 
-- Up to 5 goals, each with a daily target and a unit. Weights add up to exactly 100.
+- Up to 5 goals, each with a daily target and an optional unit. Weights add up to 100.
+  Dashes, commas, bullets and glued units like `45min` are all fine.
 - Goals are set on Sunday and lock at 3am Monday until the next Sunday. If you
   join midweek, you can set yours straight away and you are scored from that day.
 - A day stays open until 3am IST. After that it is sealed.
@@ -21,10 +22,10 @@ It runs on a Cloudflare Worker with D1 (SQLite) and fits in the free tier.
 
 ```
 /goals               everyone's goals this week
-/goals               set yours, one per line: name weight target unit
-dsa 40 45 min
-gym 30 1 session
-read 30 20 pages
+/goals               set yours, one per line: name weight% target unit
+dsa 40% 45 min
+gym 30% 1 session
+read 30% 20 pages
 
 /log 45 1 20         today's numbers, in your goal order
 /log dsa 45          one goal

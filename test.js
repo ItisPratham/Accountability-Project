@@ -61,25 +61,54 @@ assert.equal(good.error, undefined, "valid goals parse");
 assert.equal(good.goals.length, 3);
 assert.deepEqual(good.goals[2], { pos: 3, title: "read", weight: 30, target: 20, unit: "pages of a book" });
 
+// the ways people actually type them
+const one = (line, want, what) => {
+  const r = parseGoals(line);
+  assert.equal(r.error, undefined, `${what}: ${r.error}`);
+  const { title, weight, target, unit } = r.goals[0];
+  assert.deepEqual({ title, weight, target, unit }, want, what);
+};
+const dsa = { title: "dsa", weight: 100, target: 45, unit: "min" };
+one("dsa 100% 45 min", dsa, "percent sign");
+one("dsa 100 % 45 min", dsa, "spaced percent");
+one("dsa - 100% - 45 min", dsa, "dash separators");
+one("dsa — 100% — 45 min", dsa, "em dashes");
+one("1. dsa: 100%, 45min.", dsa, "numbered, colon, comma, glued unit, full stop");
+one("- dsa 100 45 mins.", { ...dsa, unit: "mins" }, "bullet and trailing dot");
+one("• dsa 45 min 100%", dsa, "percent makes order free");
+one("leetcode problems 100% 3 problems",
+  { title: "leetcode-problems", weight: 100, target: 3, unit: "problems" }, "multi-word name");
+one("leet-code 100 3 problems",
+  { title: "leet-code", weight: 100, target: 3, unit: "problems" }, "hyphen inside name");
+one("meditate 100% 1", { title: "meditate", weight: 100, target: 1, unit: "" }, "unit optional");
+one("sleep 100% 7.5 hours", { title: "sleep", weight: 100, target: 7.5, unit: "hours" }, "decimal target");
+assert.equal(parseGoals("a 33.33% 1 x\nb 33.33% 1 x\nc 33.34% 1 x").error, undefined, "decimal weights");
+
 const bad = (body, what) => assert.ok(parseGoals(body).error, what);
 bad("dsa 40 45 min\ngym 30 1 session", "weights short of 100");
-bad("dsa 100 45", "missing unit");
+bad("dsa 100", "no target");
 bad("dsa 100 0 min", "zero target");
-bad("dsa 100.5 45 min", "fractional weight");
+bad("dsa 100.5 45 min", "weights over 100");
 bad("dsa -10 45 min\ngym 110 1 x", "negative weight");
-bad("45 100 45 min", "numeric title would break /log");
+bad("45 100 45 min", "no name");
+bad("dsa 40% 60% 45 min", "two percents");
+bad("dsa 40 45 min 3", "three numbers");
 bad("dsa 50 45 min\nDSA 50 1 x", "duplicate names, any case");
 bad("a 20 1 x\nb 20 1 x\nc 20 1 x\nd 20 1 x\ne 10 1 x\nf 10 1 x", "six goals");
 bad("   \n  ", "empty");
 
 const gs = good.goals;
-assert.deepEqual(parseLog(["45", "1", "20"], gs).entries.map(([, n]) => n), [45, 1, 20], "positional");
+const amounts = (args) => parseLog(args, gs).entries.map(([, n]) => n);
+assert.deepEqual(amounts(["45", "1", "20"]), [45, 1, 20], "positional");
+assert.deepEqual(amounts(["45min,", "1,", "20."]), [45, 1, 20], "glued units and commas");
+assert.deepEqual(amounts(["45", "min", "1", "session", "20", "pages"]), [45, 1, 20], "unit words ignored");
+assert.deepEqual(amounts(["2.5", "0", "0"]), [2.5, 0, 0], "decimals and zeros");
 assert.deepEqual(parseLog(["GYM", "1"], gs).entries.map(([g, n]) => [g.title, n]), [["gym", 1]], "named, any case");
-assert.deepEqual(parseLog(["2.5", "0", "0"], gs).entries.map(([, n]) => n), [2.5, 0, 0], "decimals and zeros");
+assert.deepEqual(parseLog(["dsa:", "45min"], gs).entries.map(([g, n]) => [g.title, n]), [["dsa", 45]], "named, punctuated");
 assert.ok(parseLog(["45", "1"], gs).error, "too few numbers");
 assert.ok(parseLog(["45", "-1", "2"], gs).error, "negative");
 assert.ok(parseLog(["yoga", "30"], gs).error, "unknown goal");
-assert.ok(parseLog(["dsa", "lots"], gs).error, "named but not a number");
+assert.ok(parseLog(["dsa", "lots"], gs).error, "named but no number");
 assert.deepEqual(parseLog(["45"], [gs[0]]).entries.map(([, n]) => n), [45], "single goal positional");
 
 // ---- standings -------------------------------------------------------------
