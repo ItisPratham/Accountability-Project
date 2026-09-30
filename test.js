@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import * as core from "./src/core.js";
 
 const { logicalDay, addDays, mondayOf, daysBetween, scoreGoal, scoreWeek,
-  goalWeek, parseGoals, parseLog, standings } = core;
+  goalWeek, parseGoals, parseLog, standings, memberChecks } = core;
 
 const near = (got, want, what) =>
   assert.ok(Math.abs(got - want) < 1e-9, `${what}: got ${got}, wanted ${want}`);
@@ -147,5 +147,46 @@ near(by.C.score, 100 / 3, "late setter eats Mon and Tue");
 assert.equal(by.C.days, 3);
 assert.equal(standings({ users, goals, logs }, "2026-09-20")[0].user.name, "A",
   "Sunday through-date scores the week that is ending");
+
+// ---- membership ------------------------------------------------------------
+
+// Morning of Wed 2026-09-30, so Tue 09-29 is the last sealed day.
+const TODAY = "2026-09-30";
+const m = (id, active_on, extra = {}) => ({ id, name: `m${id}`, active_on, ...extra });
+const who = (members, data = {}) => {
+  const r = memberChecks({ members, goals: [], logs: [], ...data }, TODAY);
+  return Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v.map((x) => x.id)]));
+};
+const none = { warn: [], remove: [], cheer: [] };
+
+assert.deepEqual(who([m(1, "2026-09-25")]), none, "4 idle days: fine");
+assert.deepEqual(who([m(1, "2026-09-24")]), { ...none, warn: [1] }, "5 idle days: warned");
+assert.deepEqual(who([m(1, "2026-09-23", { warned_on: "2026-09-29" })]), none, "warned yesterday, 6 idle: wait");
+assert.deepEqual(who([m(1, "2026-09-22", { warned_on: "2026-09-28" })]), { ...none, remove: [1] }, "7 idle, warned 2 days ago: out");
+assert.deepEqual(who([m(1, "2026-09-20")]), { ...none, warn: [1] }, "missed the day-5 check: warn first, never straight to removal");
+assert.deepEqual(who([m(1, "2026-09-20", { warned_on: "2026-09-29" })]), none, "warned only yesterday: still 2 days' grace");
+assert.deepEqual(who([m(1, "2026-09-29", { warned_on: "2026-09-27" })]), none, "logged after the warning: cleared");
+assert.deepEqual(who([m(1, "2026-09-01", { kicked_on: "2026-09-10" })]), none, "removed members are skipped");
+assert.deepEqual(who([m(1, TODAY)]), none, "joined today");
+
+// the 50% nudge: window is Thu 09-25 .. Tue 09-29
+const cg = [
+  { id: 1, user_id: 1, week: "2026-09-28", weight: 60, target: 10 },
+  { id: 2, user_id: 1, week: "2026-09-28", weight: 40, target: 10 },
+  { id: 3, user_id: 1, week: "2026-09-21", weight: 100, target: 10 },
+];
+const L = (goal_id, day, amount) => ({ goal_id, day, amount });
+assert.deepEqual(who([m(1, "2026-09-29")], { goals: cg, logs: [L(1, "2026-09-29", 5), L(3, "2026-09-26", 4)] }),
+  { ...none, cheer: [1] }, "logging, best day 40: nudged");
+assert.deepEqual(who([m(1, "2026-09-29")], { goals: cg, logs: [L(1, "2026-09-29", 5), L(2, "2026-09-29", 5)] }),
+  none, "one day at exactly 50: fine");
+assert.deepEqual(who([m(1, "2026-09-29")], { goals: cg, logs: [L(3, "2026-09-25", 10), L(1, "2026-09-29", 1)] }),
+  none, "a full day last week, still inside the window: fine");
+assert.deepEqual(who([m(1, "2026-09-29", { cheered_on: "2026-09-27" })], { goals: cg, logs: [L(1, "2026-09-29", 1)] }),
+  none, "nudged 3 days ago: not again yet");
+assert.deepEqual(who([m(1, "2026-09-29", { cheered_on: "2026-09-25" })], { goals: cg, logs: [L(1, "2026-09-29", 1)] }),
+  { ...none, cheer: [1] }, "nudged 5 days ago: again");
+assert.deepEqual(who([m(1, "2026-09-29")], { goals: cg, logs: [L(1, "2026-09-20", 1)] }),
+  none, "no logs inside the window: that's the idle rule's job");
 
 console.log("all good");

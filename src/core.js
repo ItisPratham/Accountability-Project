@@ -201,3 +201,45 @@ export function standings({ users, goals, logs }, through) {
     })
     .sort((a, b) => b.score - a.score || (b.allTime ?? 0) - (a.allTime ?? 0));
 }
+
+// ---- membership ------------------------------------------------------------
+
+export const WARN_AFTER = 5; // idle days before a warning
+export const KICK_AFTER = 7; // idle days before removal, at least 2 days after the warning
+const CHEER_WINDOW = 5; // days looked back for a day at 50% or better
+
+/**
+ * The morning check, run once a day. Yesterday is the last sealed day.
+ * Returns who to warn, who to remove, and who to nudge about hitting 50%.
+ * Removed members (kicked_on set) are skipped until they come back.
+ */
+export function memberChecks({ members, goals, logs }, today) {
+  const yesterday = addDays(today, -1);
+  const amount = new Map(logs.map((l) => [`${l.goal_id}|${l.day}`, l.amount]));
+  const window = daysBetween(addDays(today, -CHEER_WINDOW), yesterday);
+  const out = { warn: [], remove: [], cheer: [] };
+
+  for (const m of members) {
+    if (m.kicked_on) continue;
+    const idle = daysBetween(addDays(m.active_on, 1), yesterday).length;
+    const warned = m.warned_on && m.warned_on > m.active_on; // warned since they were last active
+
+    if (warned && idle >= KICK_AFTER && m.warned_on <= addDays(today, -2)) {
+      out.remove.push(m);
+    } else if (!warned && idle >= WARN_AFTER) {
+      out.warn.push(m);
+    } else if (!(m.cheered_on > addDays(today, -CHEER_WINDOW))) {
+      // Logged at least once in the window, but no single day reached 50%.
+      const days = window.map((d) => {
+        const gs = goals.filter((g) => g.user_id === m.id && g.week === mondayOf(d));
+        return {
+          logged: gs.some((g) => amount.has(`${g.id}|${d}`)),
+          score: gs.reduce((s, g) =>
+            s + g.weight * Math.min((amount.get(`${g.id}|${d}`) ?? 0) / g.target, 1), 0),
+        };
+      });
+      if (days.some((d) => d.logged) && days.every((d) => d.score < 50)) out.cheer.push(m);
+    }
+  }
+  return out;
+}
