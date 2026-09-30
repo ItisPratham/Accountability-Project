@@ -17,6 +17,11 @@ It runs on a Cloudflare Worker with D1 (SQLite) and fits in the free tier.
 - Overshoot rolls forward, but only up to one day's worth, so you can cover one
   day at most. A day you fell short on stays short.
 - The leaderboard resets every Monday. Your average over past weeks sits next to it.
+- Logging or setting goals keeps you active. After 5 days of neither you get a
+  warning, and at 7 days the bot removes you from the group. The owner can add
+  you back, and the bot remembers. Admins can't be removed, so they get called
+  out instead.
+- If you're logging but none of your last 5 days reached 50%, you get a nudge.
 
 ## Commands
 
@@ -69,7 +74,10 @@ the 8am standings, and a Sunday 8pm reminder to set goals.
    ```bash
    npx wrangler secret put GROUP_ID
    ```
-7. In @BotFather, send `/setjoingroups`, pick the bot, and choose Disable.
+7. Make the bot a group admin with only the "Ban users" permission, so it can
+   remove inactive members. As an admin it receives every message in the group,
+   but it ignores anything that isn't a command and stores none of it.
+8. In @BotFather, send `/setjoingroups`, pick the bot, and choose Disable.
    Nobody can add it to another group after that, you included. Turn it back
    on for a minute if you ever move to a new group.
 

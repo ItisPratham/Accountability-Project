@@ -1,6 +1,7 @@
 import {
   logicalDay, addDays, weekday, mondayOf, daysBetween,
   goalWeek, parseGoals, parseLog, standings,
+  memberChecks, WARN_AFTER, KICK_AFTER,
 } from "./core.js";
 
 // Every message goes out as Telegram HTML, so anything a user typed
@@ -35,6 +36,9 @@ Logging again replaces that day's number.
 <b>How scoring works</b>
 Each goal scores what you logged ÷ its target, capped at 100%. A day with no log scores 0. Extra carries over to cover the next day, but only one day's worth. Your week is the weighted average, and it resets every Monday.
 
+<b>Staying in</b>
+Logging or setting goals keeps you active. Go ${WARN_AFTER} days without either and you get a warning. At ${KICK_AFTER} days you're removed from the group. If none of your last 5 days reaches 50%, expect a nudge.
+
 <b>Check in</b>
 <code>/board</code>  this week's standings
 <code>/goals</code>  everyone's goals
@@ -48,7 +52,9 @@ async function tg(env, method, body) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) console.log(method, r.status, await r.text());
+  const j = await r.json().catch(() => ({ ok: false }));
+  if (!j.ok) console.log(method, r.status, JSON.stringify(j));
+  return j;
 }
 
 const say = (env, text) => tg(env, "sendMessage", { chat_id: env.GROUP_ID, text, parse_mode: "HTML" });
@@ -110,6 +116,11 @@ function goalsText({ users, goals }, today) {
 const welcome = (people) =>
   `Welcome, ${people.map((u) => mention({ id: u.id, name: u.first_name })).join(", ")}. Here's how this works.\n\n${USAGE}`;
 
+const welcomeBack = (u, kicks) =>
+  `Welcome back, ${mention({ id: u.id, name: u.first_name })}. Are you ready for change? Last time you weren't.` +
+  (kicks > 1 ? ` That's ${kicks} removals so far.` : "") +
+  "\n\nSet your goals with /goals, or send /help for the rules.";
+
 function todayText(goals, logged, today) {
   return [`<b>${shortDay(today)}</b>`, ...goals.map((g) => logged.has(g.id)
     ? `${esc(g.title)}: ${logged.get(g.id)}/${qty(g.target, g.unit)}`
@@ -120,13 +131,26 @@ function todayText(goals, logged, today) {
 
 // ponytail: reads whole tables. A friend group will not notice for years.
 async function load(env) {
-  const [users, goals, logs] = await env.DB.batch([
+  const [users, goals, logs, members] = await env.DB.batch([
     env.DB.prepare("SELECT * FROM users"),
     env.DB.prepare("SELECT * FROM goals ORDER BY user_id, week, pos"),
     env.DB.prepare("SELECT * FROM logs"),
+    env.DB.prepare("SELECT * FROM members"),
   ]);
-  return { users: users.results, goals: goals.results, logs: logs.results };
+  // Removed members drop off boards and nudges until they come back.
+  const out = new Set(members.results.filter((m) => m.kicked_on).map((m) => m.id));
+  return {
+    users: users.results.filter((u) => !out.has(u.id)),
+    goals: goals.results,
+    logs: logs.results,
+    members: members.results,
+  };
 }
+
+// Any /log or /goals counts as activity and restarts the idle clock.
+const touch = (env, me, today) =>
+  env.DB.prepare("INSERT INTO members (id, name, active_on) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, active_on = excluded.active_on")
+    .bind(me.id, me.name, today);
 
 const myGoals = async (env, userId, week) =>
   (await env.DB.prepare("SELECT * FROM goals WHERE user_id = ? AND week = ? ORDER BY pos")
@@ -150,6 +174,10 @@ async function handle(msg, env) {
   const me = { id: msg.from.id, name: msg.from.first_name };
   const today = logicalDay();
 
+  // First command from someone the bot hasn't met: start their idle clock.
+  await env.DB.prepare("INSERT OR IGNORE INTO members (id, name, active_on) VALUES (?, ?, ?)")
+    .bind(me.id, me.name, today).run();
+
   switch (cmd) {
     case "/start":
     case "/help":
@@ -170,6 +198,7 @@ async function handle(msg, env) {
 
       const db = env.DB;
       await db.batch([
+        touch(env, me, today),
         db.prepare("INSERT INTO users (id, name, joined_on) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name")
           .bind(me.id, me.name, today),
         // Only ever next week's untouched rows (Sunday) or nothing (midweek), so no logs hang off them.
@@ -196,9 +225,12 @@ async function handle(msg, env) {
       const parsed = parseLog(args, goals);
       if (parsed.error) return reply(env, msg, esc(parsed.error));
 
-      await env.DB.batch(parsed.entries.map(([g, n]) =>
-        env.DB.prepare("INSERT INTO logs (goal_id, day, amount) VALUES (?, ?, ?) ON CONFLICT(goal_id, day) DO UPDATE SET amount = excluded.amount")
-          .bind(g.id, today, n)));
+      await env.DB.batch([
+        touch(env, me, today),
+        ...parsed.entries.map(([g, n]) =>
+          env.DB.prepare("INSERT INTO logs (goal_id, day, amount) VALUES (?, ?, ?) ON CONFLICT(goal_id, day) DO UPDATE SET amount = excluded.amount")
+            .bind(g.id, today, n)),
+      ]);
       return reply(env, msg, todayText(goals, await loggedToday(env, me.id, today), today));
     }
   }
@@ -222,7 +254,8 @@ async function scheduled(event, env) {
     }
     case "30 2 * * *": { // 08:00 IST: yesterday's standings. On Monday that is last week's final.
       const through = addDays(today, -1);
-      return say(env, boardText(standings(data, through), through, false));
+      await say(env, boardText(standings(data, through), through, false));
+      return dailyChecks(env, data, today);
     }
     case "30 14 * * SUN": { // 20:00 IST Sunday: plan next week
       const missing = data.users.filter((u) => !has(u, addDays(today, 1)));
@@ -231,6 +264,66 @@ async function scheduled(event, env) {
       return say(env, `${text}\n${who}`);
     }
   }
+}
+
+// Warn, remove, and nudge, per memberChecks. Runs after the morning standings.
+async function dailyChecks(env, data, today) {
+  const { warn, remove, cheer } = memberChecks(data, today);
+  const db = env.DB;
+  const updates = [];
+  const status = async (m) =>
+    (await tg(env, "getChatMember", { chat_id: env.GROUP_ID, user_id: m.id })).result?.status;
+  const gone = (s) => s === "left" || s === "kicked"; // left on their own: stop tracking
+
+  const warned = [];
+  for (const m of warn) {
+    if (gone(await status(m))) {
+      updates.push(db.prepare("DELETE FROM members WHERE id = ?").bind(m.id));
+      continue;
+    }
+    warned.push(m);
+    updates.push(db.prepare("UPDATE members SET warned_on = ? WHERE id = ?").bind(today, m.id));
+  }
+  if (warned.length) {
+    await say(env, `${warned.map(mention).join(", ")}: ${WARN_AFTER} days with nothing logged. Log something in the next 2 days or you're out of the group.`);
+  }
+
+  for (const m of remove) {
+    const s = await status(m);
+    if (gone(s)) {
+      updates.push(db.prepare("DELETE FROM members WHERE id = ?").bind(m.id));
+    } else if (s === "creator" || s === "administrator") {
+      // Telegram won't let a bot remove admins. Call it out and restart their clock.
+      await say(env, `${mention(m)}: ${KICK_AFTER} days with nothing logged. You're an admin so I can't remove you, but everyone can see it.`);
+      updates.push(db.prepare("UPDATE members SET active_on = ? WHERE id = ?").bind(today, m.id));
+    } else if ((await tg(env, "banChatMember", { chat_id: env.GROUP_ID, user_id: m.id })).ok) {
+      // Unban straight away: removed, not banned, so the owner can add them back.
+      await tg(env, "unbanChatMember", { chat_id: env.GROUP_ID, user_id: m.id, only_if_banned: true });
+      updates.push(db.prepare("UPDATE members SET kicked_on = ?, kicks = kicks + 1 WHERE id = ?").bind(today, m.id));
+      await say(env, `${esc(m.name)} is out after ${KICK_AFTER} days with nothing logged. The owner can add them back.`);
+    } else {
+      await say(env, `I tried to remove ${esc(m.name)} after ${KICK_AFTER} idle days, but I need to be a group admin with permission to ban users.`);
+    }
+  }
+
+  if (cheer.length) {
+    await say(env, `${cheer.map(mention).join(", ")}: you've been logging, but none of your last 5 days reached 50%. Pick your biggest goal and hit it today.`);
+    updates.push(...cheer.map((m) => db.prepare("UPDATE members SET cheered_on = ? WHERE id = ?").bind(today, m.id)));
+  }
+  if (updates.length) await db.batch(updates);
+}
+
+async function onJoin(env, people) {
+  const today = logicalDay();
+  const known = new Map((await env.DB.prepare("SELECT * FROM members").all()).results.map((m) => [m.id, m]));
+  await env.DB.batch(people.map((u) =>
+    env.DB.prepare("INSERT INTO members (id, name, active_on) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, active_on = excluded.active_on, warned_on = NULL, kicked_on = NULL")
+      .bind(u.id, u.first_name, today)));
+
+  const back = people.filter((u) => known.get(u.id)?.kicked_on);
+  const fresh = people.filter((u) => !known.get(u.id)?.kicked_on);
+  for (const u of back) await say(env, welcomeBack(u, known.get(u.id).kicks));
+  if (fresh.length) await say(env, welcome(fresh));
 }
 
 export default {
@@ -248,7 +341,7 @@ export default {
     try {
       if (String(msg.chat.id) === env.GROUP_ID) {
         const joined = (msg.new_chat_members ?? []).filter((u) => !u.is_bot);
-        if (joined.length) await say(env, welcome(joined));
+        if (joined.length) await onJoin(env, joined);
         else if (msg.text?.startsWith("/")) await handle(msg, env);
       } else {
         // Silent everywhere else. The log line is how you find GROUP_ID during

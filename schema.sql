@@ -38,9 +38,7 @@ CREATE TABLE IF NOT EXISTS members (
   kicks      INTEGER NOT NULL DEFAULT 0
 );
 
--- Everyone who already set goals becomes a member, active as of their last log.
+-- Anyone who already set goals becomes a member with a clean slate: their idle
+-- clock starts the day this table appears. (+150 minutes = the bot's IST day.)
 INSERT OR IGNORE INTO members (id, name, active_on)
-SELECT u.id, u.name, COALESCE(
-  (SELECT MAX(l.day) FROM logs l JOIN goals g ON g.id = l.goal_id WHERE g.user_id = u.id),
-  u.joined_on)
-FROM users u;
+SELECT id, name, strftime('%Y-%m-%d', 'now', '+150 minutes') FROM users;
