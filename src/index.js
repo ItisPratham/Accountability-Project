@@ -72,14 +72,23 @@ const reply = (env, msg, text) =>
 const ASK_GOALS = "Reply to this message with your goals";
 const ASK_LOG = "Reply to this message with today's numbers";
 
-const ask = (env, msg, text, placeholder) =>
-  tg(env, "sendMessage", {
+const del = (env, chat_id, message_id) => tg(env, "deleteMessage", { chat_id, message_id });
+
+// Ask, then delete the message that led here (a bare command or a failed
+// attempt). The question names the person so it's clear whose turn it is and so
+// the reply box opens only for them. Once answered the question is deleted too,
+// which leaves just the good answer and the confirmation in the chat.
+// Deleting other people's messages needs the "Delete messages" admin right;
+// without it those calls fail quietly and only the bot's own questions go.
+async function ask(env, msg, text, placeholder) {
+  await tg(env, "sendMessage", {
     chat_id: msg.chat.id,
-    text,
+    text: `${mention({ id: msg.from.id, name: msg.from.first_name })}\n${text}`,
     parse_mode: "HTML",
-    reply_parameters: { message_id: msg.message_id },
     reply_markup: { force_reply: true, selective: true, input_field_placeholder: placeholder },
   });
+  await del(env, msg.chat.id, msg.message_id);
+}
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const mention = (u) => `<a href="tg://user?id=${u.id}">${esc(u.name)}</a>`;
@@ -181,13 +190,14 @@ async function loggedToday(env, userId, today) {
 
 async function handle(msg, env) {
   let text = msg.text.trim();
+  // Is this a reply to one of the bot's questions?
+  const asked = msg.reply_to_message?.from?.is_bot ? msg.reply_to_message.text ?? "" : "";
+  const answering = asked.includes(ASK_GOALS) ? "/setgoals\n" : asked.includes(ASK_LOG) ? "/log " : null;
   if (!text.startsWith("/")) {
-    // Not a command: only counts as the answer to one of the bot's questions.
-    const asked = msg.reply_to_message?.from?.is_bot ? msg.reply_to_message.text ?? "" : "";
-    if (asked.includes(ASK_GOALS)) text = `/setgoals\n${text}`;
-    else if (asked.includes(ASK_LOG)) text = `/log ${text}`;
-    else return;
+    if (!answering) return; // ordinary chat
+    text = answering + text;
   }
+  if (answering) await del(env, msg.chat.id, msg.reply_to_message.message_id);
   const token = text.split(/\s/)[0];
   const cmd = token.split("@")[0]; // "/log@yourbot" in groups
   const body = text.slice(token.length).trim();

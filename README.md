@@ -78,8 +78,9 @@ the 8am standings, and a Sunday 8pm reminder to set goals.
    ```bash
    npx wrangler secret put GROUP_ID
    ```
-7. Make the bot a group admin with only the "Ban users" permission, so it can
-   remove inactive members. As an admin it receives every message in the group,
+7. Make the bot a group admin with only the "Ban users" and "Delete messages"
+   permissions. It removes inactive members, and it tidies up its own questions
+   and failed attempts once they are answered. As an admin it receives every message in the group,
    but it ignores anything that isn't a command and stores none of it.
 8. In @BotFather, send `/setjoingroups`, pick the bot, and choose Disable.
    Nobody can add it to another group after that, you included. Turn it back

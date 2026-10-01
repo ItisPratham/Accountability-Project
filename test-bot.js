@@ -24,6 +24,7 @@ const env = {
 
 const status = {}; // user id -> chat member status, default "member"
 let calls = [];
+let botMsg = 5000; // ids of the bot's own messages
 const TAGS = /<\/?(b|i|code|pre)>|<a href="tg:\/\/user\?id=\d+">|<\/a>/g;
 globalThis.fetch = async (url, init) => {
   const method = url.split("/").pop();
@@ -33,7 +34,8 @@ globalThis.fetch = async (url, init) => {
     assert.ok(!/[<>]|&(?!amp;|lt;|gt;)/.test(body.text.replace(TAGS, "")), `bad html: ${body.text}`);
   }
   calls.push({ method, ...body });
-  const result = method === "getChatMember" ? { status: status[body.user_id] ?? "member" } : true;
+  const result = method === "getChatMember" ? { status: status[body.user_id] ?? "member" }
+    : method === "sendMessage" ? { message_id: ++botMsg } : true;
   return { json: async () => ({ ok: true, result }) };
 };
 
@@ -60,11 +62,16 @@ async function send(from, text, { chat = -100123, type = "supergroup", secret = 
     headers: { "x-telegram-bot-api-secret-token": secret },
     body: JSON.stringify({ message: { message_id: ++id, chat: { id: chat, type }, from, text, ...extra } }),
   }), env);
-  return Object.assign(texts(), { status: res.status, asks: calls.some((c) => c.reply_markup?.force_reply) });
+  return Object.assign(texts(), {
+    status: res.status,
+    id,
+    asks: calls.some((c) => c.reply_markup?.force_reply),
+    deleted: calls.filter((c) => c.method === "deleteMessage").map((c) => c.message_id),
+  });
 }
 // Reply to the bot's last message, as tapping "reply" in Telegram would.
 const answer = (from, text, botSaid) =>
-  send(from, text, { reply_to_message: { from: { is_bot: true }, text: botSaid } });
+  send(from, text, { reply_to_message: { message_id: botMsg, from: { is_bot: true }, text: botSaid } });
 const join = (u) => send(u, undefined, { new_chat_members: [{ ...u, is_bot: false }] });
 async function cron(expr) {
   calls = [];
@@ -83,10 +90,15 @@ let r;
 
 at("09-20T18:00");
 r = await send(A, "/setgoals");
-assert.ok(r.asks && /Reply to this message with your goals for the week of 21/.test(r[0]), "bare /setgoals asks");
+assert.ok(r.asks && /^@Asha\nReply to this message with your goals for the week of 21/.test(r[0]), "bare /setgoals asks, by name");
+assert.deepEqual(r.deleted, [r.id], "the bare command is cleaned up");
+let question = botMsg;
 r = await answer(A, "dsa 60 45 min\ngym 30 1 session", r[0]);
 assert.ok(r.asks && /dsa 60 \+ gym 30 = 90/.test(r[0]), "bad weights: explains and asks again");
+assert.deepEqual(r.deleted, [question, r.id], "the old question and the failed attempt are cleaned up");
+question = botMsg;
 r = await answer(A, "1. dsa - 60% - 45min.\n2. gym: 40%, 1 session", r[0]);
+assert.deepEqual(r.deleted, [question], "on success only the question goes: the answer and confirmation stay");
 assert.match(r[0], /Set for the week of 21[\s\S]*1\. dsa · 45 min a day · 60%[\s\S]*2\. gym · 1 session a day · 40%/, "messy reply accepted");
 assert.match((await send(B, "/goals@acc_bot read 100% 20 pages"))[0], /Set for the week of 21/, "one-message form still works");
 assert.match((await send(G, "/setgoals nap 100% 1"))[0], /nap · 1 a day · 100%/, "unit optional");
@@ -105,7 +117,9 @@ assert.ok(r.asks && /dsa: not logged[\s\S]*Reply to this message with today's nu
 r = await answer(A, "90 min", r[0]);
 assert.ok(r.asks && /Send 2 numbers[\s\S]*Like: \/log 45 1/.test(r[0]), "one number short: asks again");
 assert.match((await answer(A, "90min, 1", r[0]))[0], /Mon 21[\s\S]*dsa: 90\/45 min\ngym: 1\/1 session/, "reply logs");
-assert.match((await send(B, "/log 10"))[0], /read: 10\/20 pages/);
+r = await send(B, "/log 10");
+assert.match(r[0], /read: 10\/20 pages/);
+assert.deepEqual(r.deleted, [], "a one-message log that works leaves everything alone");
 assert.match((await send(B, "/log read 25"))[0], /read: 25\/20 pages/, "logging again replaces");
 assert.equal((await send(A, "nice work everyone")).length, 0, "plain chat ignored");
 assert.equal((await send(A, "3 9", { reply_to_message: { from: { is_bot: false }, text: "Reply to this message with today's numbers" } })).length, 0,
