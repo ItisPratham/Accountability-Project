@@ -29,7 +29,7 @@ const TAGS = /<\/?(b|i|code|pre)>|<a href="tg:\/\/user\?id=\d+">|<\/a>/g;
 globalThis.fetch = async (url, init) => {
   const method = url.split("/").pop();
   const body = JSON.parse(init.body);
-  if (method === "sendMessage") {
+  if (method === "sendMessage" || method === "editMessageText") {
     assert.equal(body.parse_mode, "HTML");
     assert.ok(!/[<>]|&(?!amp;|lt;|gt;)/.test(body.text.replace(TAGS, "")), `bad html: ${body.text}`);
   }
@@ -72,6 +72,24 @@ async function send(from, text, { chat = -100123, type = "supergroup", secret = 
 // Reply to the bot's last message, as tapping "reply" in Telegram would.
 const answer = (from, text, botSaid) =>
   send(from, text, { reply_to_message: { message_id: botMsg, from: { is_bot: true }, text: botSaid } });
+// Press an inline button on one of the bot's messages.
+async function tap(from, data, message_id = botMsg) {
+  calls = [];
+  await bot.fetch(new Request("https://bot/", {
+    method: "POST",
+    headers: { "x-telegram-bot-api-secret-token": "s3cret" },
+    body: JSON.stringify({ callback_query: { id: "q", from, data, message: { message_id, chat: { id: -100123 } } } }),
+  }), env);
+  const edit = calls.find((c) => c.method === "editMessageText");
+  return {
+    toast: calls.find((c) => c.method === "answerCallbackQuery"),
+    edit: edit && plain(edit.text),
+    buttons: edit?.reply_markup.inline_keyboard.flat().map((b) => b.text),
+    sent: texts(),
+  };
+}
+const goalId = (u, title) => rows("SELECT id FROM goals WHERE user_id = ? AND title = ? ORDER BY week DESC", [u.id, title])[0].id;
+const loggedOn = (gid, day) => rows("SELECT amount FROM logs WHERE goal_id = ? AND day = ?", [gid, day])[0]?.amount;
 const join = (u) => send(u, undefined, { new_chat_members: [{ ...u, is_bot: false }] });
 async function cron(expr) {
   calls = [];
@@ -113,10 +131,33 @@ assert.match((await send(A, "/setgoals dsa 70% 45 min\ngym 30% 1 session"))[0], 
 at("09-21T10:00");
 assert.match((await send(A, "/setgoals"))[0], /locked until Sunday/, "locked on Monday, and doesn't ask");
 r = await send(A, "/log");
-assert.ok(r.asks && /dsa: not logged[\s\S]*Reply to this message with today's numbers, in this order: dsa, gym/.test(r[0]), "bare /log asks");
+assert.match(r[0], /^@Asha\nMon 21 Sept\ndsa: not logged[\s\S]*Reply to this message with today's numbers, in this order: dsa, gym/, "bare /log opens the form");
+assert.deepEqual(calls[0].reply_markup.inline_keyboard.map((row) => row.map((b) => b.text)),
+  [["dsa (min)"], ["0", "22.5", "45", "67.5", "90"], ["gym (session)"], ["0", "0.5", "1", "1.5", "2"]], "quick picks per goal");
+assert.deepEqual(r.deleted, [r.id], "the bare /log is cleaned up");
 r = await answer(A, "90 min", r[0]);
 assert.ok(r.asks && /Send 2 numbers[\s\S]*Like: \/log 45 1/.test(r[0]), "one number short: asks again");
 assert.match((await answer(A, "90min, 1", r[0]))[0], /Mon 21[\s\S]*dsa: 90\/45 min\ngym: 1\/1 session/, "reply logs");
+// tapping the form
+await send(B, "/log");
+const read = goalId(B, "read");
+r = await tap(B, `l:${read}:10:2026-09-21`);
+assert.match(r.edit, /read: 10\/20 pages/, "a tap logs and redraws the form");
+assert.ok(r.buttons.includes("✓ 10"), "the chosen number is ticked");
+assert.equal(r.toast.text, "read: 10");
+assert.equal(loggedOn(read, "2026-09-21"), 10);
+r = await tap(B, `l:${read}:10:2026-09-21`);
+assert.equal(r.edit, undefined, "tapping the same number again doesn't redraw");
+r = await tap(A, `l:${read}:40:2026-09-21`);
+assert.ok(r.toast.show_alert && /not your form/.test(r.toast.text), "can't tap someone else's form");
+r = await tap(B, `l:${read}:40:2026-09-20`);
+assert.ok(r.toast.show_alert && /earlier day/.test(r.toast.text), "yesterday's form is dead");
+assert.equal(loggedOn(read, "2026-09-21"), 10, "and neither changed anything");
+r = await tap(B, "f");
+assert.match(r.sent[0], /^@Bo\nMon 21 Sept\nread: 10\/20 pages/, "the Log today button opens your own form");
+r = await tap(C, "f");
+assert.ok(r.toast.show_alert && /no goals this week/.test(r.toast.text) && !r.sent.length, "no goals, no form");
+
 r = await send(B, "/log 10");
 assert.match(r[0], /read: 10\/20 pages/);
 assert.deepEqual(r.deleted, [], "a one-message log that works leaves everything alone");
@@ -157,6 +198,7 @@ assert.match((await join({ id: 7, first_name: "Dee" }))[0], /^Welcome, @Dee\.[\s
 
 at("09-23T21:30");
 assert.match((await cron(NUDGE))[0], /^Not logged yet today: @Asha, @Bo, @Ghost, @<b>Evil & Co$/, "nudge names the unlogged");
+assert.equal(calls[0].reply_markup.inline_keyboard[0][0].callback_data, "f", "with a Log today button");
 at("09-24T08:00");
 assert.match((await cron(MORNING))[0], /^Week of 21 Sept\nthrough Wed 23/, "morning standings");
 

@@ -31,18 +31,19 @@ dsa 40% 45 min         name, weight %, daily target, unit
 gym 30% 1 session
 read 30% 20 pages
 
-/log                 the bot asks for today's numbers, you reply with them
-/log 45 1 20         or send them in one go, in your goal order
+/log                 opens a form: tap a number under each goal
+/log 45 1 20         or type them, in your goal order
 /log dsa 45          one goal
 /goals               everyone's goals this week
 /board               this week's standings
 ```
 
-Tapping a command in Telegram's menu sends it immediately, which is why
-`/setgoals` and `/log` work as a question and a reply. Sending everything in
-one message works too.
+Tapping a command in Telegram's menu sends it immediately, so `/setgoals`
+asks and you reply, and `/log` opens a form with quick picks (nothing, half,
+target, one and a half, double). Reply to the form with numbers when you need
+an exact figure. Sending everything in one message works too.
 
-The bot posts on its own three times: a 9:30pm list of whoever hasn't logged,
+The bot posts on its own three times: a 9:30pm list of whoever hasn't logged (with a Log today button),
 the 8am standings, and a Sunday 8pm reminder to set goals.
 
 ## Setup

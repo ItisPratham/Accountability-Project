@@ -27,8 +27,8 @@ Up to 5 goals. Set them on Sunday, they lock at 3am Monday for the whole week. J
 const USAGE = `${GOALS_HELP}
 
 <b>Log every day, before 3am</b>
-<code>/log</code>  the bot asks for today's numbers, you reply with them
-<code>/log 45 1 20</code>  or send them in one go, one per goal in order
+<code>/log</code>  opens a form, tap a number for each goal
+<code>/log 45 1 20</code>  or type them, one per goal in order
 <code>/log dsa 45</code>  update just one goal
 Logging again replaces that day's number.
 
@@ -56,7 +56,8 @@ async function tg(env, method, body) {
   return j;
 }
 
-const say = (env, text) => tg(env, "sendMessage", { chat_id: env.GROUP_ID, text, parse_mode: "HTML" });
+const say = (env, text, extra) =>
+  tg(env, "sendMessage", { chat_id: env.GROUP_ID, text, parse_mode: "HTML", ...extra });
 
 const reply = (env, msg, text) =>
   tg(env, "sendMessage", {
@@ -254,31 +255,84 @@ That's name, weight %, daily target, unit. Up to 5 goals, weights add up to 100.
         ...parsed.goals.map(goalLine),
         "",
         lock,
-        `/log takes numbers in this order: ${esc(parsed.goals.map((g) => g.title).join(", "))}`,
+        "Send /log each day and tap your numbers.",
       ].join("\n"));
     }
 
     case "/log": {
       const goals = await myGoals(env, me.id, mondayOf(today));
       if (!goals.length) return reply(env, msg, "You have no goals this week. Set them with /setgoals.");
-      const order = esc(goals.map((g) => g.title).join(", "));
       const example = goals.map((g) => g.target).join(" ");
       if (!args.length) {
-        const status = todayText(goals, await loggedToday(env, me.id, today), today);
-        return ask(env, msg, `${status}\n\n${ASK_LOG}, in this order: ${order}`, example);
+        await say(env, ...(await logForm(env, me, today)));
+        return del(env, msg.chat.id, msg.message_id);
       }
       const parsed = parseLog(args, goals);
       if (parsed.error) return ask(env, msg, `${esc(parsed.error)}\n\n${ASK_LOG} to try again.`, example);
 
-      await env.DB.batch([
-        touch(env, me, today),
-        ...parsed.entries.map(([g, n]) =>
-          env.DB.prepare("INSERT INTO logs (goal_id, day, amount) VALUES (?, ?, ?) ON CONFLICT(goal_id, day) DO UPDATE SET amount = excluded.amount")
-            .bind(g.id, today, n)),
-      ]);
+      await env.DB.batch([touch(env, me, today), ...parsed.entries.map(([g, n]) => upsertLog(env, g.id, today, n))]);
       return reply(env, msg, todayText(goals, await loggedToday(env, me.id, today), today));
     }
   }
+}
+
+// ---- the log form ----------------------------------------------------------
+
+const upsertLog = (env, goalId, day, amount) =>
+  env.DB.prepare("INSERT INTO logs (goal_id, day, amount) VALUES (?, ?, ?) ON CONFLICT(goal_id, day) DO UPDATE SET amount = excluded.amount")
+    .bind(goalId, day, amount);
+
+// Today's status with a row of quick picks under each goal: nothing, half,
+// target, one and a half, double. Returns [text, extra] for say(), or null if
+// the person has no goals this week. Replying to it with numbers works too.
+async function logForm(env, me, today) {
+  const goals = await myGoals(env, me.id, mondayOf(today));
+  if (!goals.length) return null;
+  const logged = await loggedToday(env, me.id, today);
+  const rows = goals.flatMap((g) => [
+    [{ text: g.unit ? `${g.title} (${g.unit})` : g.title, callback_data: "-" }],
+    [0, 0.5, 1, 1.5, 2].map((k) => +(g.target * k).toFixed(2)).map((n) => ({
+      text: logged.get(g.id) === n ? `✓ ${n}` : `${n}`,
+      callback_data: `l:${g.id}:${n}:${today}`,
+    })),
+  ]);
+  const text = `${mention(me)}\n${todayText(goals, logged, today)}\n\n` +
+    `Tap a number under each goal. For an exact figure: ${ASK_LOG}, in this order: ${esc(goals.map((g) => g.title).join(", "))}`;
+  return [text, { reply_markup: { inline_keyboard: rows } }];
+}
+
+// A button press. "f" opens the presser's own form (the button under the nightly
+// nudge). "l:goal:amount:day" logs one number and redraws the form.
+async function onTap(tap, env) {
+  const today = logicalDay();
+  const me = { id: tap.from.id, name: tap.from.first_name };
+  const answer = (text, alert = false) =>
+    tg(env, "answerCallbackQuery", { callback_query_id: tap.id, text, show_alert: alert });
+  const [kind, goalId, amount, day] = (tap.data ?? "").split(":");
+
+  if (kind === "f") {
+    const form = await logForm(env, me, today);
+    if (!form) return answer("You have no goals this week. Send /setgoals.", true);
+    await say(env, ...form);
+    return answer();
+  }
+  if (kind !== "l") return answer();
+  if (day !== today) return answer("That form is from an earlier day. Send /log for today's.", true);
+
+  // The goal must be the presser's own and from this week, whatever the button claims.
+  const n = Number(amount);
+  const goal = (await myGoals(env, me.id, mondayOf(today))).find((g) => g.id === Number(goalId));
+  if (!goal || !(n >= 0)) return answer("That's not your form. Send /log for yours.", true);
+
+  const before = (await loggedToday(env, me.id, today)).get(goal.id);
+  await env.DB.batch([touch(env, me, today), upsertLog(env, goal.id, today, n)]);
+  if (before !== n) { // Telegram rejects an edit that changes nothing
+    const [text, extra] = await logForm(env, me, today);
+    await tg(env, "editMessageText", {
+      chat_id: tap.message.chat.id, message_id: tap.message.message_id, text, parse_mode: "HTML", ...extra,
+    });
+  }
+  return answer(`${goal.title}: ${n}`);
 }
 
 // ---- cron ------------------------------------------------------------------
@@ -294,7 +348,10 @@ async function scheduled(event, env) {
       const logged = new Set(data.logs.filter((l) => l.day === today).map((l) => l.goal_id));
       const late = data.users.filter((u) =>
         data.goals.some((g) => g.user_id === u.id && g.week === week && !logged.has(g.id)));
-      if (late.length) await say(env, `Not logged yet today: ${late.map(mention).join(", ")}`);
+      if (late.length) {
+        await say(env, `Not logged yet today: ${late.map(mention).join(", ")}`,
+          { reply_markup: { inline_keyboard: [[{ text: "Log today", callback_data: "f" }]] } });
+      }
       return;
     }
     case "30 2 * * *": { // 08:00 IST: yesterday's standings. On Monday that is last week's final.
@@ -380,7 +437,16 @@ export default {
     if (req.headers.get("x-telegram-bot-api-secret-token") !== env.SECRET) {
       return new Response("no", { status: 401 });
     }
-    const msg = (await req.json()).message;
+    const update = await req.json();
+    const tap = update.callback_query;
+    if (tap && String(tap.message?.chat.id) === env.GROUP_ID) {
+      try {
+        await onTap(tap, env);
+      } catch (e) {
+        console.log("tap failed", e.stack);
+      }
+    }
+    const msg = update.message;
     if (!msg) return new Response("ok");
 
     try {
