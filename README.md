@@ -26,17 +26,21 @@ It runs on a Cloudflare Worker with D1 (SQLite) and fits in the free tier.
 ## Commands
 
 ```
-/goals               everyone's goals this week
-/goals               set yours, one per line: name weight% target unit
-dsa 40% 45 min
+/setgoals            the bot asks for your goals, you reply with one per line:
+dsa 40% 45 min         name, weight %, daily target, unit
 gym 30% 1 session
 read 30% 20 pages
 
-/log 45 1 20         today's numbers, in your goal order
+/log                 the bot asks for today's numbers, you reply with them
+/log 45 1 20         or send them in one go, in your goal order
 /log dsa 45          one goal
-/log                 what you've logged today
+/goals               everyone's goals this week
 /board               this week's standings
 ```
+
+Tapping a command in Telegram's menu sends it immediately, which is why
+`/setgoals` and `/log` work as a question and a reply. Sending everything in
+one message works too.
 
 The bot posts on its own three times: a 9:30pm list of whoever hasn't logged,
 the 8am standings, and a Sunday 8pm reminder to set goals.
@@ -90,7 +94,8 @@ private and only let admins add members.
 
 ## Development
 
-`npm test` runs the scoring, parsing and standings checks. All the logic lives
+`npm test` runs the logic checks, then drives the whole bot against a fake
+Telegram and an in-memory database. All the logic lives
 in `src/core.js` with no Telegram or database code in it. `src/index.js` is the
 glue.
 
