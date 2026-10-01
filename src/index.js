@@ -1,7 +1,7 @@
 import {
   logicalDay, addDays, weekday, mondayOf, daysBetween,
   goalWeek, parseGoals, parseLog, standings,
-  memberChecks, WARN_AFTER, KICK_AFTER,
+  memberChecks, WARN_AFTER, KICK_AFTER, steps,
 } from "./core.js";
 
 // Every message goes out as Telegram HTML, so anything a user typed
@@ -27,7 +27,7 @@ Up to 5 goals. Set them on Sunday, they lock at 3am Monday for the whole week. J
 const USAGE = `${GOALS_HELP}
 
 <b>Log every day, before 3am</b>
-<code>/log</code>  opens a form, tap 0 to 100% for each goal
+<code>/log</code>  opens a form: adjust each goal with the buttons, tap Done
 <code>/log 45 1 20</code>  or type them, one per goal in order
 <code>/log dsa 45</code>  update just one goal
 Logging again replaces that day's number.
@@ -282,36 +282,51 @@ const upsertLog = (env, goalId, day, amount) =>
   env.DB.prepare("INSERT INTO logs (goal_id, day, amount) VALUES (?, ?, ?) ON CONFLICT(goal_id, day) DO UPDATE SET amount = excluded.amount")
     .bind(goalId, day, amount);
 
-// Today's status with a row of quick picks under each goal: 0, 25, 50, 75 and
-// 100% of the target. Going over target means typing the number. Returns [text, extra] for say(), or null if
-// the person has no goals this week. Replying to it with numbers works too.
+// Today's status with buttons under each goal: step down, step up, or jump
+// straight to the target. Every tap saves, so an abandoned form loses nothing.
+// Done strips the buttons and leaves the day's log. Returns [text, extra] for
+// say(), or null if the person has no goals this week.
 async function logForm(env, me, today) {
   const goals = await myGoals(env, me.id, mondayOf(today));
   if (!goals.length) return null;
   const logged = await loggedToday(env, me.id, today);
-  const rows = goals.flatMap((g) => [
-    [{ text: g.unit ? `${g.title} (${g.unit})` : g.title, callback_data: "-" }],
-    [0, 25, 50, 75, 100].map((pct) => [pct, +(g.target * pct / 100).toFixed(2)]).map(([pct, n]) => ({
-      text: logged.get(g.id) === n ? `✓ ${pct}%` : `${pct}%`,
-      callback_data: `l:${g.id}:${n}:${today}`,
-      // Solid colours, since the default buttons are translucent and vanish into
-      // some wallpapers. Older Telegram apps ignore this and show them as before.
-      style: logged.get(g.id) === n ? "success" : "primary",
-    })),
-  ]);
+  // Solid colours, since the default buttons are translucent and vanish into
+  // some wallpapers. Older Telegram apps ignore `style` and show them as before.
+  const rows = goals.flatMap((g) => {
+    const [small, big] = steps(g.target);
+    const step = (d) => ({
+      text: d > 0 ? `+${d}` : `−${-d}`,
+      callback_data: `s:${g.id}:${d}:${today}`,
+      style: d > 0 ? "primary" : "danger",
+    });
+    return [
+      [{ text: `${g.title}: ${logged.get(g.id) ?? 0} / ${g.target}${g.unit ? ` ${g.unit}` : ""}`, callback_data: "-" }],
+      [step(-big), step(-small), { text: "Full", callback_data: `t:${g.id}:${today}`, style: "success" }, step(small), step(big)],
+    ];
+  });
+  rows.push([{ text: "Done", callback_data: `d:${me.id}:${today}`, style: "success" }]);
   const text = `${mention(me)}\n${todayText(goals, logged, today)}\n\n` +
-    `Tap how much of each goal you did. For an exact figure, or more than 100%: ${ASK_LOG}, in this order: ${esc(goals.map((g) => g.title).join(", "))}`;
+    "Use the buttons under each goal, then tap Done.\n" +
+    `Rather type? ${ASK_LOG}, in this order: ${esc(goals.map((g) => g.title).join(", "))}`;
   return [text, { reply_markup: { inline_keyboard: rows } }];
 }
 
-// A button press. "f" opens the presser's own form (the button under the nightly
-// nudge). "l:goal:amount:day" logs one number and redraws the form.
+// A button press. callback_data is one of:
+//   f                 open the presser's own form (the button under the nightly nudge)
+//   s:goal:delta:day  step a goal up or down
+//   t:goal:day        set a goal to its target
+//   d:user:day        done: drop the buttons, keep the log
 async function onTap(tap, env) {
   const today = logicalDay();
   const me = { id: tap.from.id, name: tap.from.first_name };
   const answer = (text, alert = false) =>
     tg(env, "answerCallbackQuery", { callback_query_id: tap.id, text, show_alert: alert });
-  const [kind, goalId, amount, day] = (tap.data ?? "").split(":");
+  const redraw = (text, extra) =>
+    tg(env, "editMessageText", {
+      chat_id: tap.message.chat.id, message_id: tap.message.message_id, text, parse_mode: "HTML", ...extra,
+    });
+  const notYours = () => answer("That's not your form. Send /log for yours.", true);
+  const [kind, a, b, c] = (tap.data ?? "").split(":");
 
   if (kind === "f") {
     const form = await logForm(env, me, today);
@@ -319,22 +334,35 @@ async function onTap(tap, env) {
     await say(env, ...form);
     return answer();
   }
-  if (kind !== "l") return answer();
-  if (day !== today) return answer("That form is from an earlier day. Send /log for today's.", true);
 
+  if (kind === "d") {
+    if (Number(a) !== me.id) return notYours();
+    const day = b;
+    const goals = await myGoals(env, me.id, mondayOf(day));
+    // Done means "that's my day": anything left untouched counts as 0. Only for
+    // today, though. A sealed day's form just loses its buttons.
+    const logged = await loggedToday(env, me.id, day);
+    const blank = day === today ? goals.filter((g) => !logged.has(g.id)) : [];
+    if (blank.length) {
+      await env.DB.batch([touch(env, me, today), ...blank.map((g) => upsertLog(env, g.id, today, 0))]);
+    }
+    await redraw(`${mention(me)}\n${todayText(goals, await loggedToday(env, me.id, day), day)}`); // no keyboard
+    return answer("Saved");
+  }
+
+  if (kind !== "s" && kind !== "t") return answer();
+  if ((kind === "s" ? c : b) !== today) {
+    return answer("That form is from an earlier day. Send /log for today's.", true);
+  }
   // The goal must be the presser's own and from this week, whatever the button claims.
-  const n = Number(amount);
-  const goal = (await myGoals(env, me.id, mondayOf(today))).find((g) => g.id === Number(goalId));
-  if (!goal || !(n >= 0)) return answer("That's not your form. Send /log for yours.", true);
+  const goal = (await myGoals(env, me.id, mondayOf(today))).find((g) => g.id === Number(a));
+  if (!goal) return notYours();
 
   const before = (await loggedToday(env, me.id, today)).get(goal.id);
+  const n = kind === "t" ? goal.target : Math.max(0, +((before ?? 0) + Number(b)).toFixed(2));
+  if (!(n >= 0)) return answer();
   await env.DB.batch([touch(env, me, today), upsertLog(env, goal.id, today, n)]);
-  if (before !== n) { // Telegram rejects an edit that changes nothing
-    const [text, extra] = await logForm(env, me, today);
-    await tg(env, "editMessageText", {
-      chat_id: tap.message.chat.id, message_id: tap.message.message_id, text, parse_mode: "HTML", ...extra,
-    });
-  }
+  if (before !== n) await redraw(...(await logForm(env, me, today))); // Telegram rejects an edit that changes nothing
   return answer(`${goal.title}: ${n}`);
 }
 

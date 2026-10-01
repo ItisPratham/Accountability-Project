@@ -31,7 +31,7 @@ dsa 40% 45 min         name, weight %, daily target, unit
 gym 30% 1 session
 read 30% 20 pages
 
-/log                 opens a form: tap a number under each goal
+/log                 opens a form: step each goal up or down, tap Done
 /log 45 1 20         or type them, in your goal order
 /log dsa 45          one goal
 /goals               everyone's goals this week
@@ -39,9 +39,10 @@ read 30% 20 pages
 ```
 
 Tapping a command in Telegram's menu sends it immediately, so `/setgoals`
-asks and you reply, and `/log` opens a form with five buttons per goal (0, 25,
-50, 75, 100% of the target). Reply to the form with numbers for an exact
-figure or anything over target. Sending everything in one message works too.
+asks and you reply, and `/log` opens a form. Each goal gets step buttons
+(`−10 −1 Full +1 +10`, sized to the target) and every tap saves. Done removes
+the buttons and leaves the day's log, counting anything untouched as 0. You can
+also reply to the form with numbers, or send everything in one message.
 
 The bot posts on its own three times: a 9:30pm list of whoever hasn't logged (with a Log today button),
 the 8am standings, and a Sunday 8pm reminder to set goals.

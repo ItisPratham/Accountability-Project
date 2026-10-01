@@ -202,6 +202,18 @@ export function standings({ users, goals, logs }, through) {
     .sort((a, b) => b.score - a.score || (b.allTime ?? 0) - (a.allTime ?? 0));
 }
 
+// ---- the log form's step sizes ---------------------------------------------
+
+// Nearest "nice" number: 1, 2 or 5 times a power of ten.
+function nice(x) {
+  const p = 10 ** Math.floor(Math.log10(x));
+  const f = x / p;
+  return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p;
+}
+
+/** [small, big] steps for the +/- buttons. 45 min -> 1 and 10, 1 session -> 0.5 and 1. */
+export const steps = (target) => (target < 15 ? [0.5, 1] : [1, nice(target / 5)]);
+
 // ---- membership ------------------------------------------------------------
 
 export const WARN_AFTER = 5; // idle days before a warning

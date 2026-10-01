@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import * as core from "./src/core.js";
 
 const { logicalDay, addDays, mondayOf, daysBetween, scoreGoal, scoreWeek,
-  goalWeek, parseGoals, parseLog, standings, memberChecks } = core;
+  goalWeek, parseGoals, parseLog, standings, memberChecks, steps } = core;
 
 const near = (got, want, what) =>
   assert.ok(Math.abs(got - want) < 1e-9, `${what}: got ${got}, wanted ${want}`);
@@ -147,6 +147,15 @@ near(by.C.score, 100 / 3, "late setter eats Mon and Tue");
 assert.equal(by.C.days, 3);
 assert.equal(standings({ users, goals, logs }, "2026-09-20")[0].user.name, "A",
   "Sunday through-date scores the week that is ending");
+
+// ---- step sizes ------------------------------------------------------------
+
+assert.deepEqual(steps(45), [1, 10], "45 min");
+assert.deepEqual(steps(20), [1, 5], "20 pages");
+assert.deepEqual(steps(100), [1, 20], "100 reps");
+assert.deepEqual(steps(10000), [1, 2000], "10000 steps");
+assert.deepEqual(steps(1), [0.5, 1], "1 session");
+assert.deepEqual(steps(7.5), [0.5, 1], "7.5 hours");
 
 // ---- membership ------------------------------------------------------------
 
