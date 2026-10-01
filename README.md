@@ -39,9 +39,9 @@ read 30% 20 pages
 ```
 
 Tapping a command in Telegram's menu sends it immediately, so `/setgoals`
-asks and you reply, and `/log` opens a form with quick picks (nothing, half,
-target, one and a half, double). Reply to the form with numbers when you need
-an exact figure. Sending everything in one message works too.
+asks and you reply, and `/log` opens a form with five buttons per goal (0, 25,
+50, 75, 100% of the target). Reply to the form with numbers for an exact
+figure or anything over target. Sending everything in one message works too.
 
 The bot posts on its own three times: a 9:30pm list of whoever hasn't logged (with a Log today button),
 the 8am standings, and a Sunday 8pm reminder to set goals.

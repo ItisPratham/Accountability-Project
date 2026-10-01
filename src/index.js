@@ -27,7 +27,7 @@ Up to 5 goals. Set them on Sunday, they lock at 3am Monday for the whole week. J
 const USAGE = `${GOALS_HELP}
 
 <b>Log every day, before 3am</b>
-<code>/log</code>  opens a form, tap a number for each goal
+<code>/log</code>  opens a form, tap 0 to 100% for each goal
 <code>/log 45 1 20</code>  or type them, one per goal in order
 <code>/log dsa 45</code>  update just one goal
 Logging again replaces that day's number.
@@ -282,8 +282,8 @@ const upsertLog = (env, goalId, day, amount) =>
   env.DB.prepare("INSERT INTO logs (goal_id, day, amount) VALUES (?, ?, ?) ON CONFLICT(goal_id, day) DO UPDATE SET amount = excluded.amount")
     .bind(goalId, day, amount);
 
-// Today's status with a row of quick picks under each goal: nothing, half,
-// target, one and a half, double. Returns [text, extra] for say(), or null if
+// Today's status with a row of quick picks under each goal: 0, 25, 50, 75 and
+// 100% of the target. Going over target means typing the number. Returns [text, extra] for say(), or null if
 // the person has no goals this week. Replying to it with numbers works too.
 async function logForm(env, me, today) {
   const goals = await myGoals(env, me.id, mondayOf(today));
@@ -291,8 +291,8 @@ async function logForm(env, me, today) {
   const logged = await loggedToday(env, me.id, today);
   const rows = goals.flatMap((g) => [
     [{ text: g.unit ? `${g.title} (${g.unit})` : g.title, callback_data: "-" }],
-    [0, 0.5, 1, 1.5, 2].map((k) => +(g.target * k).toFixed(2)).map((n) => ({
-      text: logged.get(g.id) === n ? `✓ ${n}` : `${n}`,
+    [0, 25, 50, 75, 100].map((pct) => [pct, +(g.target * pct / 100).toFixed(2)]).map(([pct, n]) => ({
+      text: logged.get(g.id) === n ? `✓ ${pct}%` : `${pct}%`,
       callback_data: `l:${g.id}:${n}:${today}`,
       // Solid colours, since the default buttons are translucent and vanish into
       // some wallpapers. Older Telegram apps ignore this and show them as before.
@@ -300,7 +300,7 @@ async function logForm(env, me, today) {
     })),
   ]);
   const text = `${mention(me)}\n${todayText(goals, logged, today)}\n\n` +
-    `Tap a number under each goal. For an exact figure: ${ASK_LOG}, in this order: ${esc(goals.map((g) => g.title).join(", "))}`;
+    `Tap how much of each goal you did. For an exact figure, or more than 100%: ${ASK_LOG}, in this order: ${esc(goals.map((g) => g.title).join(", "))}`;
   return [text, { reply_markup: { inline_keyboard: rows } }];
 }
 

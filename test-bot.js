@@ -133,7 +133,9 @@ assert.match((await send(A, "/setgoals"))[0], /locked until Sunday/, "locked on 
 r = await send(A, "/log");
 assert.match(r[0], /^@Asha\nMon 21 Sept\ndsa: not logged[\s\S]*Reply to this message with today's numbers, in this order: dsa, gym/, "bare /log opens the form");
 assert.deepEqual(calls[0].reply_markup.inline_keyboard.map((row) => row.map((b) => b.text)),
-  [["dsa (min)"], ["0", "22.5", "45", "67.5", "90"], ["gym (session)"], ["0", "0.5", "1", "1.5", "2"]], "quick picks per goal");
+  [["dsa (min)"], ["0%", "25%", "50%", "75%", "100%"], ["gym (session)"], ["0%", "25%", "50%", "75%", "100%"]], "quick picks per goal");
+assert.deepEqual(calls[0].reply_markup.inline_keyboard[1].map((b) => b.callback_data.split(":")[2]),
+  ["0", "11.25", "22.5", "33.75", "45"], "each pick carries the real amount");
 assert.deepEqual(r.deleted, [r.id], "the bare /log is cleaned up");
 r = await answer(A, "90 min", r[0]);
 assert.ok(r.asks && /Send 2 numbers[\s\S]*Like: \/log 45 1/.test(r[0]), "one number short: asks again");
@@ -143,9 +145,9 @@ await send(B, "/log");
 const read = goalId(B, "read");
 r = await tap(B, `l:${read}:10:2026-09-21`);
 assert.match(r.edit, /read: 10\/20 pages/, "a tap logs and redraws the form");
-assert.ok(r.buttons.includes("✓ 10"), "the chosen number is ticked");
+assert.ok(r.buttons.includes("✓ 50%"), "10 of 20 pages ticks 50%");
 assert.deepEqual(calls.find((c) => c.method === "editMessageText").reply_markup.inline_keyboard[1].map((b) => b.style),
-  ["primary", "success", "primary", "primary", "primary"], "picks are solid blue, the chosen one green");
+  ["primary", "primary", "success", "primary", "primary"], "picks are solid blue, the chosen one green");
 assert.equal(r.toast.text, "read: 10");
 assert.equal(loggedOn(read, "2026-09-21"), 10);
 r = await tap(B, `l:${read}:10:2026-09-21`);
