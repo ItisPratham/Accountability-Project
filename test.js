@@ -150,12 +150,14 @@ assert.equal(standings({ users, goals, logs }, "2026-09-20")[0].user.name, "A",
 
 // ---- step sizes ------------------------------------------------------------
 
-assert.deepEqual(steps(45), [1, 10], "45 min");
-assert.deepEqual(steps(20), [1, 5], "20 pages");
-assert.deepEqual(steps(100), [1, 20], "100 reps");
-assert.deepEqual(steps(10000), [1, 2000], "10000 steps");
+assert.deepEqual(steps(45), [5, 10], "45 min");
+assert.deepEqual(steps(20), [2, 5], "20 pages");
+assert.deepEqual(steps(100), [10, 20], "100 reps");
+assert.deepEqual(steps(10000), [1000, 2000], "10000 steps");
+assert.deepEqual(steps(7.5), [1, 2], "7.5 hours");
+assert.deepEqual(steps(15), [2, 4], "15: both round to 2, so the big one doubles");
+assert.deepEqual(steps(3), [0.5, 1], "3 problems");
 assert.deepEqual(steps(1), [0.5, 1], "1 session");
-assert.deepEqual(steps(7.5), [0.5, 1], "7.5 hours");
 
 // ---- membership ------------------------------------------------------------
 

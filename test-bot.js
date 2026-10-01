@@ -133,8 +133,8 @@ assert.match((await send(A, "/setgoals"))[0], /locked until Sunday/, "locked on 
 r = await send(A, "/log");
 assert.match(r[0], /^@Asha\nMon 21 Sept\ndsa: not logged[\s\S]*Reply to this message with today's numbers, in this order: dsa, gym/, "bare /log opens the form");
 assert.deepEqual(calls[0].reply_markup.inline_keyboard.map((row) => row.map((b) => b.text)), [
-  ["dsa: 0 / 45 min"], ["−10", "−1", "Full", "+1", "+10"],
-  ["gym: 0 / 1 session"], ["−1", "−0.5", "Full", "+0.5", "+1"],
+  ["dsa: 0 / 45 min"], ["−10", "−5", "Half", "Full", "+5", "+10"],
+  ["gym: 0 / 1 session"], ["−1", "−0.5", "Half", "Full", "+0.5", "+1"],
   ["Done"],
 ], "a stepper per goal, then Done");
 assert.deepEqual(r.deleted, [r.id], "the bare /log is cleaned up");
@@ -153,11 +153,14 @@ assert.ok(r.buttons.includes("read: 20 / 20 pages"), "the label shows the runnin
 assert.equal(r.toast.text, "read: 20");
 r = await tap(B, `t:${read}:${DAY}`);
 assert.equal(r.edit, undefined, "no redraw when nothing changed");
+await tap(B, `h:${read}:${DAY}`);
+assert.equal(loggedOn(read, DAY), 10, "Half is half the target");
+await tap(B, `t:${read}:${DAY}`);
 await tap(B, `s:${read}:5:${DAY}`);
 r = await tap(B, `s:${read}:-1:${DAY}`);
 assert.equal(loggedOn(read, DAY), 24, "20 + 5 - 1, saved on every tap");
 assert.deepEqual(calls.find((c) => c.method === "editMessageText").reply_markup.inline_keyboard[1].map((b) => b.style),
-  ["danger", "danger", "success", "primary", "primary"], "solid colours");
+  ["danger", "danger", "primary", "success", "primary", "primary"], "solid colours");
 
 r = await tap(A, `s:${read}:5:${DAY}`);
 assert.ok(r.toast.show_alert && /not your form/.test(r.toast.text), "can't step someone else's goal");

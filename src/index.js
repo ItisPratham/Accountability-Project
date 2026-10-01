@@ -283,7 +283,7 @@ const upsertLog = (env, goalId, day, amount) =>
     .bind(goalId, day, amount);
 
 // Today's status with buttons under each goal: step down, step up, or jump
-// straight to the target. Every tap saves, so an abandoned form loses nothing.
+// straight to half or all of the target. Every tap saves, so an abandoned form loses nothing.
 // Done strips the buttons and leaves the day's log. Returns [text, extra] for
 // say(), or null if the person has no goals this week.
 async function logForm(env, me, today) {
@@ -301,7 +301,12 @@ async function logForm(env, me, today) {
     });
     return [
       [{ text: `${g.title}: ${logged.get(g.id) ?? 0} / ${g.target}${g.unit ? ` ${g.unit}` : ""}`, callback_data: "-" }],
-      [step(-big), step(-small), { text: "Full", callback_data: `t:${g.id}:${today}`, style: "success" }, step(small), step(big)],
+      [
+        step(-big), step(-small),
+        { text: "Half", callback_data: `h:${g.id}:${today}`, style: "primary" },
+        { text: "Full", callback_data: `t:${g.id}:${today}`, style: "success" },
+        step(small), step(big),
+      ],
     ];
   });
   rows.push([{ text: "Done", callback_data: `d:${me.id}:${today}`, style: "success" }]);
@@ -315,6 +320,7 @@ async function logForm(env, me, today) {
 //   f                 open the presser's own form (the button under the nightly nudge)
 //   s:goal:delta:day  step a goal up or down
 //   t:goal:day        set a goal to its target
+//   h:goal:day        set a goal to half its target
 //   d:user:day        done: drop the buttons, keep the log
 async function onTap(tap, env) {
   const today = logicalDay();
@@ -350,7 +356,7 @@ async function onTap(tap, env) {
     return answer("Saved");
   }
 
-  if (kind !== "s" && kind !== "t") return answer();
+  if (!"sth".includes(kind) || kind.length !== 1) return answer();
   if ((kind === "s" ? c : b) !== today) {
     return answer("That form is from an earlier day. Send /log for today's.", true);
   }
@@ -359,7 +365,9 @@ async function onTap(tap, env) {
   if (!goal) return notYours();
 
   const before = (await loggedToday(env, me.id, today)).get(goal.id);
-  const n = kind === "t" ? goal.target : Math.max(0, +((before ?? 0) + Number(b)).toFixed(2));
+  const n = kind === "t" ? goal.target
+    : kind === "h" ? +(goal.target / 2).toFixed(2)
+    : Math.max(0, +((before ?? 0) + Number(b)).toFixed(2));
   if (!(n >= 0)) return answer();
   await env.DB.batch([touch(env, me, today), upsertLog(env, goal.id, today, n)]);
   if (before !== n) await redraw(...(await logForm(env, me, today))); // Telegram rejects an edit that changes nothing

@@ -211,8 +211,17 @@ function nice(x) {
   return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p;
 }
 
-/** [small, big] steps for the +/- buttons. 45 min -> 1 and 10, 1 session -> 0.5 and 1. */
-export const steps = (target) => (target < 15 ? [0.5, 1] : [1, nice(target / 5)]);
+/**
+ * [small, big] steps for the +/- buttons: about 10% and 20% of the target,
+ * rounded to clean numbers. 45 min -> 5 and 10, 20 pages -> 2 and 5.
+ * Small targets get 0.5 and 1, since a tenth of a session means nothing.
+ */
+export function steps(target) {
+  if (target < 5) return [0.5, 1];
+  const small = nice(target * 0.1);
+  const big = nice(target * 0.2);
+  return [small, big > small ? big : small * 2];
+}
 
 // ---- membership ------------------------------------------------------------
 

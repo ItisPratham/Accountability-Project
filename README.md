@@ -40,7 +40,7 @@ read 30% 20 pages
 
 Tapping a command in Telegram's menu sends it immediately, so `/setgoals`
 asks and you reply, and `/log` opens a form. Each goal gets step buttons
-(`−10 −1 Full +1 +10`, sized to the target) and every tap saves. Done removes
+(`−10 −5 Half Full +5 +10`, about 10% and 20% of the target) and every tap saves. Done removes
 the buttons and leaves the day's log, counting anything untouched as 0. You can
 also reply to the form with numbers, or send everything in one message.
 
