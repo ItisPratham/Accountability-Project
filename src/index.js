@@ -8,11 +8,10 @@ import {
 // (names, goal titles, units, error text quoting them) must pass through esc().
 
 const GOALS_HELP = `<b>Set your goals</b>
-Send /goals, then one goal per line:
+Send /setgoals. The bot asks for them, and you reply with one goal per line:
 <code>name  weight%  daily-target  unit</code>
 
-<pre>/goals
-dsa 40% 45 min
+<pre>dsa 40% 45 min
 gym 30% 1 session
 read 30% 20 pages</pre>
 
@@ -28,9 +27,9 @@ Up to 5 goals. Set them on Sunday, they lock at 3am Monday for the whole week. J
 const USAGE = `${GOALS_HELP}
 
 <b>Log every day, before 3am</b>
-<code>/log 45 1 20</code>  one number per goal, in the order you set them
+<code>/log</code>  the bot asks for today's numbers, you reply with them
+<code>/log 45 1 20</code>  or send them in one go, one per goal in order
 <code>/log dsa 45</code>  update just one goal
-<code>/log</code>  see what you've logged today
 Logging again replaces that day's number.
 
 <b>How scoring works</b>
@@ -65,6 +64,21 @@ const reply = (env, msg, text) =>
     text,
     parse_mode: "HTML",
     reply_parameters: { message_id: msg.message_id },
+  });
+
+// Tapping a command in Telegram's menu sends it bare, with no room for the
+// rest. So a bare /setgoals or /log asks, and the reply to that message is the
+// answer. No state kept: the reply is recognised by these phrases in the prompt.
+const ASK_GOALS = "Reply to this message with your goals";
+const ASK_LOG = "Reply to this message with today's numbers";
+
+const ask = (env, msg, text, placeholder) =>
+  tg(env, "sendMessage", {
+    chat_id: msg.chat.id,
+    text,
+    parse_mode: "HTML",
+    reply_parameters: { message_id: msg.message_id },
+    reply_markup: { force_reply: true, selective: true, input_field_placeholder: placeholder },
   });
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -119,7 +133,7 @@ const welcome = (people) =>
 const welcomeBack = (u, kicks) =>
   `Welcome back, ${mention({ id: u.id, name: u.first_name })}. Are you ready for change? Last time you weren't.` +
   (kicks > 1 ? ` That's ${kicks} removals so far.` : "") +
-  "\n\nSet your goals with /goals, or send /help for the rules.";
+  "\n\nSet your goals with /setgoals, or send /help for the rules.";
 
 function todayText(goals, logged, today) {
   return [`<b>${shortDay(today)}</b>`, ...goals.map((g) => logged.has(g.id)
@@ -166,7 +180,14 @@ async function loggedToday(env, userId, today) {
 // ---- commands --------------------------------------------------------------
 
 async function handle(msg, env) {
-  const text = msg.text.trim();
+  let text = msg.text.trim();
+  if (!text.startsWith("/")) {
+    // Not a command: only counts as the answer to one of the bot's questions.
+    const asked = msg.reply_to_message?.from?.is_bot ? msg.reply_to_message.text ?? "" : "";
+    if (asked.includes(ASK_GOALS)) text = `/setgoals\n${text}`;
+    else if (asked.includes(ASK_LOG)) text = `/log ${text}`;
+    else return;
+  }
   const token = text.split(/\s/)[0];
   const cmd = token.split("@")[0]; // "/log@yourbot" in groups
   const body = text.slice(token.length).trim();
@@ -186,15 +207,25 @@ async function handle(msg, env) {
     case "/board":
       return reply(env, msg, boardText(standings(await load(env), today), today, true));
 
-    case "/goals": {
-      if (!body) return reply(env, msg, goalsText(await load(env), today));
-
-      const parsed = parseGoals(body);
-      if (parsed.error) return reply(env, msg, `${esc(parsed.error)}\n\n${GOALS_HELP}`);
+    case "/goals":
+    case "/setgoals": {
+      if (!body && cmd === "/goals") return reply(env, msg, goalsText(await load(env), today));
 
       const current = await myGoals(env, me.id, mondayOf(today));
       const week = goalWeek(today, current.length > 0);
       if (!week) return reply(env, msg, "Your goals are locked until Sunday.");
+
+      if (!body) {
+        return ask(env, msg, `<b>${ASK_GOALS}</b> for the week of ${dayMonth(week)}, one per line:
+<pre>dsa 40% 45 min
+gym 30% 1 session
+read 30% 20 pages</pre>
+That's name, weight %, daily target, unit. Up to 5 goals, weights add up to 100.`, "dsa 40% 45 min");
+      }
+      const parsed = parseGoals(body);
+      if (parsed.error) {
+        return ask(env, msg, `${esc(parsed.error)}\n\n${ASK_GOALS} to try again.\n\n${GOALS_HELP}`, "dsa 40% 45 min");
+      }
 
       const db = env.DB;
       await db.batch([
@@ -219,11 +250,15 @@ async function handle(msg, env) {
 
     case "/log": {
       const goals = await myGoals(env, me.id, mondayOf(today));
-      if (!goals.length) return reply(env, msg, "You have no goals this week. Set them with /goals.");
-      if (!args.length) return reply(env, msg, todayText(goals, await loggedToday(env, me.id, today), today));
-
+      if (!goals.length) return reply(env, msg, "You have no goals this week. Set them with /setgoals.");
+      const order = esc(goals.map((g) => g.title).join(", "));
+      const example = goals.map((g) => g.target).join(" ");
+      if (!args.length) {
+        const status = todayText(goals, await loggedToday(env, me.id, today), today);
+        return ask(env, msg, `${status}\n\n${ASK_LOG}, in this order: ${order}`, example);
+      }
       const parsed = parseLog(args, goals);
-      if (parsed.error) return reply(env, msg, esc(parsed.error));
+      if (parsed.error) return ask(env, msg, `${esc(parsed.error)}\n\n${ASK_LOG} to try again.`, example);
 
       await env.DB.batch([
         touch(env, me, today),
@@ -259,7 +294,7 @@ async function scheduled(event, env) {
     }
     case "30 14 * * SUN": { // 20:00 IST Sunday: plan next week
       const missing = data.users.filter((u) => !has(u, addDays(today, 1)));
-      const text = "Sunday planning. Set next week's goals with /goals, they lock at 3am.";
+      const text = "Sunday planning. Set next week's goals with /setgoals, they lock at 3am.";
       const who = missing.length ? `Still to set: ${missing.map(mention).join(", ")}` : "Everyone is set.";
       return say(env, `${text}\n${who}`);
     }
@@ -342,7 +377,7 @@ export default {
       if (String(msg.chat.id) === env.GROUP_ID) {
         const joined = (msg.new_chat_members ?? []).filter((u) => !u.is_bot);
         if (joined.length) await onJoin(env, joined);
-        else if (msg.text?.startsWith("/")) await handle(msg, env);
+        else if (msg.text) await handle(msg, env);
       } else {
         // Silent everywhere else. The log line is how you find GROUP_ID during
         // setup (wrangler tail); once it is set, walk out of any other group.
