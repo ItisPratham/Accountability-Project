@@ -144,6 +144,8 @@ const read = goalId(B, "read");
 r = await tap(B, `l:${read}:10:2026-09-21`);
 assert.match(r.edit, /read: 10\/20 pages/, "a tap logs and redraws the form");
 assert.ok(r.buttons.includes("✓ 10"), "the chosen number is ticked");
+assert.deepEqual(calls.find((c) => c.method === "editMessageText").reply_markup.inline_keyboard[1].map((b) => b.style),
+  ["primary", "success", "primary", "primary", "primary"], "picks are solid blue, the chosen one green");
 assert.equal(r.toast.text, "read: 10");
 assert.equal(loggedOn(read, "2026-09-21"), 10);
 r = await tap(B, `l:${read}:10:2026-09-21`);

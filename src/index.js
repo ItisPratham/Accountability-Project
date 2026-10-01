@@ -294,6 +294,9 @@ async function logForm(env, me, today) {
     [0, 0.5, 1, 1.5, 2].map((k) => +(g.target * k).toFixed(2)).map((n) => ({
       text: logged.get(g.id) === n ? `✓ ${n}` : `${n}`,
       callback_data: `l:${g.id}:${n}:${today}`,
+      // Solid colours, since the default buttons are translucent and vanish into
+      // some wallpapers. Older Telegram apps ignore this and show them as before.
+      style: logged.get(g.id) === n ? "success" : "primary",
     })),
   ]);
   const text = `${mention(me)}\n${todayText(goals, logged, today)}\n\n` +
