@@ -8,7 +8,7 @@ compatibility_date = "2025-09-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "accountability"
-database_id = "paste-what-wrangler-d1-create-prints"  # an id, not a credential
+database_id = "e3b4cdce-ad43-4e0e-b6af-92920262a676"  # an id, not a credential
 
 # Cron is UTC. IST is UTC+5:30.
 [triggers]

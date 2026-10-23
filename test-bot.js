@@ -22,7 +22,6 @@ const env = {
   SECRET: "s3cret", GROUP_ID: "-100123", BOT_TOKEN: "x",
 };
 
-const status = {}; // user id -> chat member status, default "member"
 let calls = [];
 let botMsg = 5000; // ids of the bot's own messages
 const TAGS = /<\/?(b|i|code|pre)>|<a href="tg:\/\/user\?id=\d+">|<\/a>/g;
@@ -34,8 +33,7 @@ globalThis.fetch = async (url, init) => {
     assert.ok(!/[<>]|&(?!amp;|lt;|gt;)/.test(body.text.replace(TAGS, "")), `bad html: ${body.text}`);
   }
   calls.push({ method, ...body });
-  const result = method === "getChatMember" ? { status: status[body.user_id] ?? "member" }
-    : method === "sendMessage" ? { message_id: ++botMsg } : true;
+  const result = method === "sendMessage" ? { message_id: ++botMsg } : true;
   return { json: async () => ({ ok: true, result }) };
 };
 
@@ -101,7 +99,6 @@ const NUDGE = "0 16 * * *", MORNING = "30 2 * * *", SUNDAY = "30 14 * * SUN";
 const A = { id: 1, first_name: "Asha" }, B = { id: 2, first_name: "Bo" }, C = { id: 3, first_name: "Cy" };
 const G = { id: 4, first_name: "Ghost" }, O = { id: 5, first_name: "Owner" };
 const X = { id: 6, first_name: "<b>Evil & Co" };
-status[O.id] = "creator";
 let r;
 
 // ---- Sunday 20 Sept: setting goals -----------------------------------------
@@ -196,11 +193,18 @@ at("09-23T12:00");
 assert.match((await send(C, "/log 5"))[0], /no goals this week/, "can't log without goals");
 assert.match((await send(C, "/setgoals run 100% 3 km"))[0], /Set for the week of 21[\s\S]*Locked until Sunday/, "midweek joiner sets now");
 await send(C, "/log 3");
+// a weekly goal
+assert.match((await send(O, "/setgoals gym 100% 3 sessions a week"))[0], /gym · 3 sessions a week · 100%/, "weekly goal");
+assert.match((await send(O, "/log 1"))[0], /gym: 1 today · 1\/3 sessions this week/, "weekly log shows the week's total");
+await send(O, "/log");
+assert.deepEqual(calls[0].reply_markup.inline_keyboard.map((row) => row.map((b) => b.text)), [
+  ["gym: 1 today, 1 / 3 sessions this week"], ["−1", "−0.5", "+0.5", "+1"], ["Done"],
+], "weekly goals get steps but no Half or Full");
 assert.match((await send(X, "/setgoals a<b 100% 1 x&y"))[0], /a<b · 1 x&y a day/, "html in names and goals is escaped");
 
 // Asha: dsa 70 x (Mon full, Tue banked, Wed 0) + gym 30 x (Tue only) = 57. Bo: 1.25/3 = 42.
 r = (await send(A, "/board"))[0];
-assert.match(r, /today still open[\s\S]*1\. Cy  100 · 1d\n2\. Asha  57\n3\. Bo  42\n/, `board: ${r}`);
+assert.match(r, /today still open[\s\S]*1\. Cy  100 · 1d\n2\. Owner  100 · 1d\n3\. Asha  57  🔥2\n4\. Bo  42\n/, `board: ${r}`);
 
 r = await tap(A, `d:${A.id}:2026-09-23`);
 assert.equal(r.edit, "@Asha\nWed 23 Sept\ndsa: 0/45 min\ngym: 0/1 session", "Done counts untouched goals as 0");
@@ -222,49 +226,44 @@ assert.match((await join({ id: 7, first_name: "Dee" }))[0], /^Welcome, @Dee\.[\s
 // ---- scheduled posts -------------------------------------------------------
 
 at("09-23T21:30");
-assert.match((await cron(NUDGE))[0], /^Not logged yet today: @Bo, @Ghost, @<b>Evil & Co$/, "nudge names the unlogged");
-assert.equal(calls[0].reply_markup.inline_keyboard[0][0].callback_data, "f", "with a Log today button");
+r = await cron(NUDGE);
+assert.deepEqual(r.map((t) => t.split("\n")[0]), ["@Bo", "@Ghost", "@<b>Evil & Co"], "a form for each person with something unlogged");
+assert.ok(r.every((t) => /Use the buttons[\s\S]*Today so far\nCy: run 3 km\nOwner: gym 1 sessions$/.test(t)), `social proof: ${r[0]}`);
+assert.ok(calls.every((c) => c.reply_markup.inline_keyboard.at(-1)[0].text === "Done"), "each with its own buttons");
 at("09-24T08:00");
-assert.match((await cron(MORNING))[0], /^Week of 21 Sept\nthrough Wed 23/, "morning standings");
-
-// ---- inactivity: warn at 5 days, out at 7 ----------------------------------
-
-at("09-26T08:00"); // Ghost and Owner both last active Sun 20: idle Mon..Fri
 r = await cron(MORNING);
-assert.ok(r.some((t) => /^@Ghost, @Owner: 5 days with nothing logged/.test(t)), `warning: ${r}`);
+assert.match(r[0], /^Week of 21 Sept\nthrough Wed 23/, "morning standings");
+assert.equal(r.length, 1, "nothing else in the morning");
+
+// ---- Sunday: repeat or carry over ------------------------------------------
 
 at("09-27T20:00");
-assert.match((await cron(SUNDAY))[0], /Still to set: .*@Ghost/, "Sunday reminder");
+r = await cron(SUNDAY);
+assert.match(r[0], /Still to set: .*@Ghost/, "Sunday reminder");
+assert.equal(calls[0].reply_markup.inline_keyboard[0][0].callback_data, "r", "with a Same as this week button");
+r = await tap(A, "r");
+assert.match(r.sent[0], /^@Asha\nSame again for the week of 28 Sept\n1\. dsa · 45 min a day · 70%\n2\. gym · 1 session a day · 30%/, "repeats this week's goals");
+assert.equal(r.toast.text, "Set");
+r = await tap({ id: 8, first_name: "New" }, "r");
+assert.ok(r.toast.show_alert && /no goals this week/.test(r.toast.text), "nothing to repeat");
+assert.match((await send(A, "/goals"))[0], /Next week, from 28[\s\S]*Asha/, "listed for next week");
 
 at("09-28T08:00");
 r = await cron(MORNING);
-assert.match(r[0], /^Final, week of 21 Sept[\s\S]*1\. Asha  24\n/, "Monday posts last week's final");
-assert.ok(r.some((t) => /^Ghost is out after 7 days/.test(t)), "removed");
-assert.ok(r.some((t) => /^@Owner: 7 days[\s\S]*can't remove you/.test(t)), "admins are called out, not removed");
-assert.deepEqual(calls.filter((c) => /ban/i.test(c.method)).map((c) => [c.method, c.user_id]),
-  [["banChatMember", G.id], ["unbanChatMember", G.id]], "ban then unban, only Ghost");
-assert.doesNotMatch((await cron(SUNDAY))[0], /Ghost/, "removed members drop off the lists");
+// Owner: 1 of 3 sessions, prorated to Wed..Sun = 1 / (3 * 5/7) = 47.
+assert.match(r[0], /^Final, week of 21 Sept\n\n1\. Owner  47 · 5d\n2\. Asha  24\n/, "Monday posts last week's final");
+assert.equal(r[1], "Same goals as last week for @Bo, @Cy, @Owner.", "then carries over whoever logged but didn't reset. Asha already had, Ghost and Evil never logged");
+assert.match((await send(B, "/log 5"))[0], /Mon 28 Sept\nread: 5\/20 pages/, "carried goals are live");
+assert.match((await send(C, "/setgoals run 100% 10 km"))[0], /locked until Sunday/, "and locked like any other");
+assert.match((await send(G, "/log 1"))[0], /no goals this week/, "Ghost was not carried");
 
-r = await join(G);
-assert.match(r[0], /^Welcome back, @Ghost\. Are you ready for change\? Last time you weren't\./, "the bot remembers");
-assert.match((await cron(SUNDAY))[0], /Ghost/, "and they are tracked again");
-assert.deepEqual(rows("SELECT kicks, kicked_on, active_on FROM members WHERE id = ?", [G.id]),
-  [{ kicks: 1, kicked_on: null, active_on: "2026-09-28" }], "clock restarted on return");
-
-// ---- the 50% nudge ---------------------------------------------------------
-
-at("09-28T09:00");
-await send(C, "/setgoals run 100% 10 km");
-at("09-29T20:00"); await send(C, "/log 3");
-at("09-30T20:00"); await send(C, "/log 4");
-at("10-01T08:00"); // window is Sat 26 .. Wed 30: best day 40%
-r = await cron(MORNING);
-assert.ok(r.some((t) => /@Cy: you've been logging, but none of your last 5 days reached 50%/.test(t)), `nudge: ${r}`);
-at("10-02T08:00");
-assert.ok(!(await cron(MORNING)).some((t) => /@Cy.*50%/.test(t)), "not nudged two days running");
-at("10-03T20:00");
-assert.match((await send(C, "/log 6"))[0], /run: 6\/10 km/);
-at("10-06T08:00"); // five days on and eligible again, but Saturday was a 60% day
-assert.ok(!(await cron(MORNING)).some((t) => /@Cy.*50%/.test(t)), "one day at 50% or better clears it");
+at("09-29T08:00");
+assert.equal((await cron(MORNING)).length, 1, "carry-over only on Monday");
+at("10-04T18:00"); // Sunday
+r = await tap(A, "r");
+assert.match(r.sent[0], /Same again for the week of 5 Oct/);
+at("10-05T10:00"); // Monday
+r = await tap(A, "r");
+assert.ok(r.toast.show_alert && /set on Sunday/.test(r.toast.text), "the button only works on Sunday");
 
 console.log("bot ok");

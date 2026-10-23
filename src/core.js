@@ -49,9 +49,34 @@ export function scoreGoal(amounts, target) {
   return sum / amounts.length;
 }
 
-/** goals: [{ weight, target, amounts }], weights total 100. Returns 0 to 100. */
+/**
+ * A weekly goal: the week's total against the target, capped at 1. Before the
+ * week is over the target is prorated to the days scored so far, so 1 of 3
+ * sessions by Tuesday is not a 33.
+ */
+export const scoreWeekly = (amounts, target) =>
+  amounts.length ? Math.min(amounts.reduce((s, a) => s + a, 0) / (target * amounts.length / 7), 1) : 0;
+
+/** goals: [{ weight, target, weekly, amounts }], weights total 100. Returns 0 to 100. */
 export const scoreWeek = (goals) =>
-  goals.reduce((total, g) => total + g.weight * scoreGoal(g.amounts, g.target), 0);
+  goals.reduce((total, g) => total + g.weight * (g.weekly ? scoreWeekly : scoreGoal)(g.amounts, g.target), 0);
+
+// ---- streaks ---------------------------------------------------------------
+
+/**
+ * Days in a row with a log (a 0 counts), walking back from `from`. One missed
+ * day is forgiven as long as the last forgiven one is at least 7 days later,
+ * so a single bad day doesn't reset a streak.
+ */
+export function streak(loggedDays, from) {
+  let n = 0;
+  let freeze = null;
+  for (let d = from; ; d = addDays(d, -1)) {
+    if (loggedDays.has(d)) n++;
+    else if (freeze === null || addDays(d, 7) <= freeze) freeze = d;
+    else return n;
+  }
+}
 
 // ---- the weekly lock -------------------------------------------------------
 
@@ -74,6 +99,7 @@ export function goalWeek(today, hasThisWeek) {
 function tokens(text) {
   return text
     .replace(/(\d)\s+%/g, "$1%") // "40 %" -> "40%"
+    .replace(/(\d)\/(week|wk)\b/gi, "$1 /$2") // "3/week" -> "3 /week"
     .split(/[\s,;:|=–—]+/)
     .map((t) => t.replace(/[.-]+$/, ""))
     .filter((t) => t && !/^[-*•.]+$/.test(t));
@@ -87,9 +113,13 @@ function readNum(t) {
 
 const EXAMPLE = "dsa 40% 45 min";
 
+// "sessions a week", "pages/week", "3 /wk", "weekly": a weekly target.
+const WEEKLY = /(?:^|\s)(?:(?:a|per)\s+)?(?:week|wk|weekly)$|\/(?:week|wk)$/i;
+
 /**
- * One goal per line: a name, then a weight and a daily target, then an
- * optional unit. With % on the weight the order after the name is free.
+ * One goal per line: a name, then a weight and a target, then an optional
+ * unit. A target is per day unless the unit ends in "a week" (or /week).
+ * With % on the weight the order after the name is free.
  * Returns { goals } or { error }.
  */
 export function parseGoals(body) {
@@ -123,7 +153,11 @@ export function parseGoals(body) {
     const target = nums.shift();
     if (nums.length || !(weight > 0) || !(target > 0)) return bad;
 
-    goals.push({ pos: i + 1, title: toks.slice(0, at).join("-"), weight, target, unit: unit.join(" ") });
+    const u = unit.join(" ");
+    goals.push({
+      pos: i + 1, title: toks.slice(0, at).join("-"), weight, target,
+      unit: u.replace(WEEKLY, "").trim(), weekly: WEEKLY.test(u),
+    });
   }
 
   const total = goals.reduce((s, g) => s + g.weight, 0);
@@ -163,17 +197,23 @@ export function parseLog(args, goals) {
 
 // ---- standings -------------------------------------------------------------
 
+const RECENT_WEEKS = 4;
+
 /**
  * Ranked rows for the week containing `through`, scored up to `through`.
  * data is the three tables as plain rows: { users, goals, logs }.
- * Each row: { user, score, days, allTime }. allTime is the mean of finished
- * past weeks (weeks with no goals set are skipped), or null.
+ * Each row: { user, score, days, recent, streak }. recent is the mean of the
+ * last 4 finished weeks that had goals, or null. `open` means `through` is
+ * today and still loggable, so an empty today doesn't count against the streak.
  *
  * ponytail: rescores every past week from raw rows on each call. Fine for a
  * friend group for years; store weekly finals in a table if it ever drags.
  */
-export function standings({ users, goals, logs }, through) {
+export function standings({ users, goals, logs }, through, open = false) {
   const amount = new Map(logs.map((l) => [`${l.goal_id}|${l.day}`, l.amount]));
+  const owner = new Map(goals.map((g) => [g.id, g.user_id]));
+  const loggedDays = new Map(users.map((u) => [u.id, new Set()]));
+  for (const l of logs) loggedDays.get(owner.get(l.goal_id))?.add(l.day);
 
   const weekScore = (user, week, end) => {
     const gs = goals.filter((g) => g.user_id === user.id && g.week === week);
@@ -183,23 +223,44 @@ export function standings({ users, goals, logs }, through) {
     const score = scoreWeek(gs.map((g) => ({
       weight: g.weight,
       target: g.target,
+      weekly: g.weekly,
       amounts: days.map((d) => amount.get(`${g.id}|${d}`) ?? 0),
     })));
     return { score, days: days.length };
   };
 
   const week = mondayOf(through);
-  const pastWeeks = [...new Set(goals.map((g) => g.week))].filter((w) => w < week);
+  const since = addDays(week, -7 * RECENT_WEEKS);
+  const pastWeeks = [...new Set(goals.map((g) => g.week))].filter((w) => w < week && w >= since);
 
   return users
     .flatMap((user) => {
       const now = weekScore(user, week, through);
       if (!now) return [];
       const past = pastWeeks.map((w) => weekScore(user, w, addDays(w, 6))).filter(Boolean);
-      const allTime = past.length ? past.reduce((s, p) => s + p.score, 0) / past.length : null;
-      return [{ user, ...now, allTime }];
+      const recent = past.length ? past.reduce((s, p) => s + p.score, 0) / past.length : null;
+      const days = loggedDays.get(user.id);
+      const from = open && !days.has(through) ? addDays(through, -1) : through;
+      return [{ user, ...now, recent, streak: streak(days, from) }];
     })
-    .sort((a, b) => b.score - a.score || (b.allTime ?? 0) - (a.allTime ?? 0));
+    .sort((a, b) => b.score - a.score || (b.recent ?? 0) - (a.recent ?? 0));
+}
+
+// ---- carrying goals forward ------------------------------------------------
+
+/**
+ * Goals to copy into `week` for everyone who had goals the week before and
+ * logged at least once, but has nothing set for `week`. Same rows, new week,
+ * no id. Anyone who never logged is left alone, so the board doesn't fill up
+ * with people who have drifted off.
+ */
+export function carryForward({ goals, logs }, week) {
+  const prev = addDays(week, -7);
+  const logged = new Set(logs.map((l) => l.goal_id));
+  const set = new Set(goals.filter((g) => g.week === week).map((g) => g.user_id));
+  const last = goals.filter((g) => g.week === prev && !set.has(g.user_id));
+  const active = new Set(last.filter((g) => logged.has(g.id)).map((g) => g.user_id));
+  return last.filter((g) => active.has(g.user_id)).map(({ id, ...g }) => ({ ...g, week }));
 }
 
 // ---- the log form's step sizes ---------------------------------------------
@@ -221,46 +282,4 @@ export function steps(target) {
   const small = nice(target * 0.1);
   const big = nice(target * 0.2);
   return [small, big > small ? big : small * 2];
-}
-
-// ---- membership ------------------------------------------------------------
-
-export const WARN_AFTER = 5; // idle days before a warning
-export const KICK_AFTER = 7; // idle days before removal, at least 2 days after the warning
-const CHEER_WINDOW = 5; // days looked back for a day at 50% or better
-
-/**
- * The morning check, run once a day. Yesterday is the last sealed day.
- * Returns who to warn, who to remove, and who to nudge about hitting 50%.
- * Removed members (kicked_on set) are skipped until they come back.
- */
-export function memberChecks({ members, goals, logs }, today) {
-  const yesterday = addDays(today, -1);
-  const amount = new Map(logs.map((l) => [`${l.goal_id}|${l.day}`, l.amount]));
-  const window = daysBetween(addDays(today, -CHEER_WINDOW), yesterday);
-  const out = { warn: [], remove: [], cheer: [] };
-
-  for (const m of members) {
-    if (m.kicked_on) continue;
-    const idle = daysBetween(addDays(m.active_on, 1), yesterday).length;
-    const warned = m.warned_on && m.warned_on > m.active_on; // warned since they were last active
-
-    if (warned && idle >= KICK_AFTER && m.warned_on <= addDays(today, -2)) {
-      out.remove.push(m);
-    } else if (!warned && idle >= WARN_AFTER) {
-      out.warn.push(m);
-    } else if (!(m.cheered_on > addDays(today, -CHEER_WINDOW))) {
-      // Logged at least once in the window, but no single day reached 50%.
-      const days = window.map((d) => {
-        const gs = goals.filter((g) => g.user_id === m.id && g.week === mondayOf(d));
-        return {
-          logged: gs.some((g) => amount.has(`${g.id}|${d}`)),
-          score: gs.reduce((s, g) =>
-            s + g.weight * Math.min((amount.get(`${g.id}|${d}`) ?? 0) / g.target, 1), 0),
-        };
-      });
-      if (days.some((d) => d.logged) && days.every((d) => d.score < 50)) out.cheer.push(m);
-    }
-  }
-  return out;
 }

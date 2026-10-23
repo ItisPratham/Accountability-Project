@@ -16,8 +16,11 @@ CREATE TABLE IF NOT EXISTS goals (
   unit    TEXT    NOT NULL,        -- 'min', 'problems', 'pages', whatever
   target  REAL    NOT NULL,        -- per day
   weight  INTEGER NOT NULL,        -- must total exactly 100 across the week's goals
+  weekly  INTEGER NOT NULL DEFAULT 0, -- 1: target is for the whole week, not per day
   UNIQUE (user_id, week, pos)
 );
+-- Existing database from before weekly goals? Run this once (ALTER has no IF NOT EXISTS):
+--   npx wrangler d1 execute accountability --remote --command "ALTER TABLE goals ADD COLUMN weekly INTEGER NOT NULL DEFAULT 0"
 
 CREATE TABLE IF NOT EXISTS logs (
   goal_id INTEGER NOT NULL REFERENCES goals(id),
@@ -25,20 +28,3 @@ CREATE TABLE IF NOT EXISTS logs (
   amount  REAL    NOT NULL,
   PRIMARY KEY (goal_id, day)       -- one row per goal per day, re-logging overwrites
 );
-
--- Group membership, kept apart from scoring. Drives the inactivity warnings,
--- removals, and "welcome back". Rows survive a removal so the bot remembers.
-CREATE TABLE IF NOT EXISTS members (
-  id         INTEGER PRIMARY KEY,  -- telegram user id
-  name       TEXT    NOT NULL,
-  active_on  TEXT    NOT NULL,     -- last /log or /goals, (re)join, or when the idle clock restarted
-  warned_on  TEXT,                 -- last inactivity warning
-  cheered_on TEXT,                 -- last "hit 50%" nudge
-  kicked_on  TEXT,                 -- set while removed, cleared when they come back
-  kicks      INTEGER NOT NULL DEFAULT 0
-);
-
--- Anyone who already set goals becomes a member with a clean slate: their idle
--- clock starts the day this table appears. (+150 minutes = the bot's IST day.)
-INSERT OR IGNORE INTO members (id, name, active_on)
-SELECT id, name, strftime('%Y-%m-%d', 'now', '+150 minutes') FROM users;

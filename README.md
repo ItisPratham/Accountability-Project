@@ -8,27 +8,32 @@ It runs on a Cloudflare Worker with D1 (SQLite) and fits in the free tier.
 
 ## Rules
 
-- Up to 5 goals, each with a daily target and an optional unit. Weights add up to 100.
+- Up to 5 goals, each with a target and an optional unit. Weights add up to 100.
   Dashes, commas, bullets and glued units like `45min` are all fine.
-- Goals are set on Sunday and lock at 3am Monday until the next Sunday. If you
+- A target is per day. End it with `a week` (or `/week`) and it is for the
+  whole week instead: `gym 30% 3 sessions a week`.
+- Goals are set on Sunday and lock at 3am Monday until the next Sunday. The
+  Sunday post has a "Same as this week" button. Do nothing and your goals carry
+  over on Monday morning, as long as you logged at least once that week. If you
   join midweek, you can set yours straight away and you are scored from that day.
 - A day stays open until 3am IST. After that it is sealed.
-- Each goal scores `logged / target` per day, capped at 1. A day with no log scores 0.
-- Overshoot rolls forward, but only up to one day's worth, so you can cover one
-  day at most. A day you fell short on stays short.
-- The leaderboard resets every Monday. Your average over past weeks sits next to it.
-- Logging or setting goals keeps you active. After 5 days of neither you get a
-  warning, and at 7 days the bot removes you from the group. The owner can add
-  you back, and the bot remembers. Admins can't be removed, so they get called
-  out instead.
-- If you're logging but none of your last 5 days reached 50%, you get a nudge.
+- A daily goal scores `logged / target` per day, capped at 1. A day with no log
+  scores 0. Overshoot rolls forward, but only up to one day's worth, so you can
+  cover one day at most. A day you fell short on stays short.
+- A weekly goal scores `week total / target`, capped at 1. Before the week is
+  over the target is prorated to the days scored so far.
+- The leaderboard resets every Monday. Next to your score: `avg`, your mean
+  over the last 4 weeks, and 🔥 your streak, days in a row with a log (a 0
+  counts). One missed day per week is forgiven.
+- There is no stick in the bot. Agree one between yourselves: lowest score of
+  the week buys dinner, a pot, whatever. The bot makes it visible, that's all.
 
 ## Commands
 
 ```
 /setgoals            the bot asks for your goals, you reply with one per line:
-dsa 40% 45 min         name, weight %, daily target, unit
-gym 30% 1 session
+dsa 40% 45 min         name, weight %, target, unit
+gym 30% 3 sessions a week
 read 30% 20 pages
 
 /log                 opens a form: step each goal up or down, tap Done
@@ -40,12 +45,14 @@ read 30% 20 pages
 
 Tapping a command in Telegram's menu sends it immediately, so `/setgoals`
 asks and you reply, and `/log` opens a form. Each goal gets step buttons
-(`−10 −5 Half Full +5 +10`, about 10% and 20% of the target) and every tap saves. Done removes
+(`−10 −5 Half Full +5 +10`, about 10% and 20% of the target; weekly goals skip Half and Full) and every tap saves. Done removes
 the buttons and leaves the day's log, counting anything untouched as 0. You can
 also reply to the form with numbers, or send everything in one message.
 
-The bot posts on its own three times: a 9:30pm list of whoever hasn't logged (with a Log today button),
-the 8am standings, and a Sunday 8pm reminder to set goals.
+The bot posts on its own: at 9:30pm, a log form for each person with something
+unlogged, with what the others did today at the bottom; at 8am, yesterday's
+standings (on Monday, last week's final and who got carried over); and on Sunday
+at 8pm a reminder to set goals, with the "Same as this week" button.
 
 ## Setup
 
@@ -80,13 +87,21 @@ the 8am standings, and a Sunday 8pm reminder to set goals.
    ```bash
    npx wrangler secret put GROUP_ID
    ```
-7. Make the bot a group admin with only the "Ban users" and "Delete messages"
-   permissions. It removes inactive members, and it tidies up its own questions
-   and failed attempts once they are answered. As an admin it receives every message in the group,
-   but it ignores anything that isn't a command and stores none of it.
+7. Make the bot a group admin with only the "Delete messages" permission, so
+   it can tidy up its own questions and failed attempts once they are answered.
+   As an admin it receives every message in the group, but it ignores anything
+   that isn't a command and stores none of it.
 8. In @BotFather, send `/setjoingroups`, pick the bot, and choose Disable.
    Nobody can add it to another group after that, you included. Turn it back
    on for a minute if you ever move to a new group.
+
+### Upgrading from before weekly goals
+
+The `goals` table gained a column. Run once:
+```bash
+npx wrangler d1 execute accountability --remote --command "ALTER TABLE goals ADD COLUMN weekly INTEGER NOT NULL DEFAULT 0"
+```
+The old `members` table is no longer used and can stay or be dropped.
 
 ## Who can use it
 
